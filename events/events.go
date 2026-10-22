@@ -36,6 +36,7 @@ const (
 	cameraPacketType           uint32 = 37
 	cameraModePacketType       uint32 = 39
 	mapPacketType              uint32 = 40
+	legacyControllerPacketType uint32 = 46
 	cameraFreeLookPacketType   uint32 = 47
 	weaponLockPacketType       uint32 = 48
 	subControllerPacketType    uint32 = 49
@@ -331,6 +332,9 @@ const (
 	// CameraFreeLookEvent identifies a camera free-look state change.
 	CameraFreeLookEvent Type = "camera_free_look"
 
+	// LegacyControllerEvent identifies a fixed-width legacy controller packet with opaque state.
+	LegacyControllerEvent Type = "legacy_controller"
+
 	// SubControllerEvent identifies a submarine controller state change.
 	SubControllerEvent Type = "sub_controller"
 
@@ -563,6 +567,13 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 			timeline.Events = append(timeline.Events, event)
 		case mapPacketType:
 			if event, err = decodeMap(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case legacyControllerPacketType:
+			if event, err = decodeLegacyController(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
 				return
 			}
@@ -1044,6 +1055,17 @@ func decodeCameraFreeLook(packet replayparser.Packet) (event Event, err error) {
 
 	var value int64 = int64(packet.Payload[0])
 	event = Event{Clock: packet.Clock, Type: CameraFreeLookEvent, Scalar: &Scalar{Integer: &value}}
+	return
+}
+
+// decodeLegacyController preserves the fixed-width controller payload used by 15.8 replays.
+func decodeLegacyController(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != 8 {
+		err = fmt.Errorf("legacy-controller packet has %d-byte payload, expected 8", len(packet.Payload))
+		return
+	}
+
+	event = Event{Clock: packet.Clock, Type: LegacyControllerEvent, Payload: packet.Payload}
 	return
 }
 

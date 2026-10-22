@@ -101,6 +101,7 @@ func TestDecodeSupportedBuildFixtures(t *testing.T) {
 			assert.NotEmpty(t, results[0].Results.Summary.Players)
 			assert.Contains(t, results[0].Results.Summary.Players, results[0].Results.Summary.AccountDBID)
 			assert.NotZero(t, timeline.OwnShipID)
+			assert.Empty(t, timeline.UnknownPackets)
 		})
 	}
 }
