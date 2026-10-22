@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"unicode/utf8"
 
 	replayparser "github.com/z46-dev/wows-replay-parser"
 )
@@ -17,6 +18,11 @@ const (
 	entityLeavePacketType     uint32 = 4
 	entityPropertyPacketType  uint32 = 7
 	entityMethodPacketType    uint32 = 8
+	serverTickPacketType      uint32 = 14
+	serverTimestampPacketType uint32 = 15
+	initFlagPacketType        uint32 = 16
+	initMarkerPacketType      uint32 = 19
+	versionPacketType         uint32 = 22
 	gunMarkerPacketType       uint32 = 24
 	playerNetStatsPacketType  uint32 = 29
 	ownedShipPacketType       uint32 = 32
@@ -25,7 +31,10 @@ const (
 	nestedPropertyPacketType  uint32 = 35
 	nonVolatilePacketType     uint32 = 42
 	cameraPacketType          uint32 = 37
+	cameraModePacketType      uint32 = 39
 	weaponLockPacketType      uint32 = 48
+	cruiseStatePacketType     uint32 = 50
+	shotTrackingPacketType    uint32 = 51
 	positionPayloadSize              = 45
 	orientationPayloadSize           = 32
 	entityCreateHeaderSize           = 42
@@ -36,6 +45,10 @@ const (
 	gunMarkerPayloadSize             = 52
 	cameraPayloadSize                = 60
 	playerNetStatsPayloadSize        = 4
+	float64PayloadSize               = 8
+	cameraModePayloadSize            = 4
+	cruiseStatePayloadSize           = 8
+	shotTrackingPayloadSize          = 12
 )
 
 type (
@@ -160,6 +173,19 @@ type (
 		IsLagging bool   `json:"isLagging"`
 	}
 
+	// Scalar records a typed protocol scalar value.
+	Scalar struct {
+		Integer *int64   `json:"integer,omitempty"`
+		Number  *float64 `json:"number,omitempty"`
+		Text    string   `json:"text,omitempty"`
+	}
+
+	// CruiseState records a cruise-control key and value update.
+	CruiseState struct {
+		Key   uint32 `json:"key"`
+		Value int32  `json:"value"`
+	}
+
 	// Event is one decoded replay event at a game clock value.
 	Event struct {
 		Clock      float32         `json:"clock"`
@@ -174,6 +200,8 @@ type (
 		GunMarker  *GunMarker      `json:"gunMarker,omitempty"`
 		Camera     *Camera         `json:"camera,omitempty"`
 		NetStats   *PlayerNetStats `json:"netStats,omitempty"`
+		Scalar     *Scalar         `json:"scalar,omitempty"`
+		Cruise     *CruiseState    `json:"cruise,omitempty"`
 		Results    *BattleResults  `json:"results,omitempty"`
 	}
 
@@ -219,6 +247,30 @@ const (
 	// PlayerNetStatsEvent identifies a captured client network state.
 	PlayerNetStatsEvent Type = "player_net_stats"
 
+	// ServerTickEvent identifies a captured server tick-rate update.
+	ServerTickEvent Type = "server_tick"
+
+	// ServerTimestampEvent identifies the replay's server timestamp.
+	ServerTimestampEvent Type = "server_timestamp"
+
+	// InitFlagEvent identifies the replay initialization flag.
+	InitFlagEvent Type = "init_flag"
+
+	// InitMarkerEvent identifies the empty replay initialization marker.
+	InitMarkerEvent Type = "init_marker"
+
+	// VersionEvent identifies the version string packet.
+	VersionEvent Type = "version"
+
+	// CameraModeEvent identifies the active camera mode.
+	CameraModeEvent Type = "camera_mode"
+
+	// CruiseStateEvent identifies a cruise-control update.
+	CruiseStateEvent Type = "cruise_state"
+
+	// ShotTrackingEvent identifies a player ship's shot-tracking update.
+	ShotTrackingEvent Type = "shot_tracking"
+
 	// EntityControlEvent identifies a client entity-control change.
 	EntityControlEvent Type = "entity_control"
 
@@ -243,6 +295,41 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 		var event Event
 
 		switch packet.Type {
+		case serverTickPacketType:
+			if event, err = decodeFloat64(packet, ServerTickEvent); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case serverTimestampPacketType:
+			if event, err = decodeFloat64(packet, ServerTimestampEvent); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case initFlagPacketType:
+			if event, err = decodeInitFlag(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case initMarkerPacketType:
+			if event, err = decodeInitMarker(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case versionPacketType:
+			if event, err = decodeVersion(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
 		case gunMarkerPacketType:
 			if event, err = decodeGunMarker(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
@@ -342,8 +429,29 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 			}
 
 			timeline.Events = append(timeline.Events, event)
+		case cameraModePacketType:
+			if event, err = decodeCameraMode(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
 		case weaponLockPacketType:
 			if event, err = decodeWeaponLock(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case cruiseStatePacketType:
+			if event, err = decodeCruiseState(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case shotTrackingPacketType:
+			if event, err = decodeShotTracking(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
 				return
 			}
@@ -552,6 +660,102 @@ func decodePlayerNetStats(packet replayparser.Packet) (event Event, err error) {
 		},
 	}
 
+	return
+}
+
+// decodeFloat64 decodes a fixed protocol float64 packet.
+func decodeFloat64(packet replayparser.Packet, eventType Type) (event Event, err error) {
+	if len(packet.Payload) != float64PayloadSize {
+		err = fmt.Errorf("%s packet has %d-byte payload, expected %d", eventType, len(packet.Payload), float64PayloadSize)
+		return
+	}
+
+	var number float64 = math.Float64frombits(binary.LittleEndian.Uint64(packet.Payload))
+	event = Event{Clock: packet.Clock, Type: eventType, Scalar: &Scalar{Number: &number}}
+	return
+}
+
+// decodeInitFlag decodes the fixed replay initialization flag.
+func decodeInitFlag(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != 1 {
+		err = fmt.Errorf("init-flag packet has %d-byte payload, expected 1", len(packet.Payload))
+		return
+	}
+
+	var value int64 = int64(packet.Payload[0])
+	event = Event{Clock: packet.Clock, Type: InitFlagEvent, Scalar: &Scalar{Integer: &value}}
+	return
+}
+
+// decodeInitMarker validates and decodes the empty replay initialization marker.
+func decodeInitMarker(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != 0 {
+		err = fmt.Errorf("init-marker packet has %d-byte payload, expected 0", len(packet.Payload))
+		return
+	}
+
+	event = Event{Clock: packet.Clock, Type: InitMarkerEvent}
+	return
+}
+
+// decodeVersion decodes the length-prefixed replay version string.
+func decodeVersion(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) < 4 {
+		err = fmt.Errorf("version packet has %d-byte payload, expected length prefix", len(packet.Payload))
+		return
+	}
+
+	var data []byte = packet.Payload[4:]
+	if uint64(binary.LittleEndian.Uint32(packet.Payload[0:4])) != uint64(len(data)) {
+		err = fmt.Errorf("version text length does not match payload")
+		return
+	}
+
+	if !utf8.Valid(data) {
+		err = fmt.Errorf("version packet is not valid UTF-8")
+		return
+	}
+
+	event = Event{Clock: packet.Clock, Type: VersionEvent, Scalar: &Scalar{Text: string(data)}}
+	return
+}
+
+// decodeCameraMode decodes the active camera mode identifier.
+func decodeCameraMode(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != cameraModePayloadSize {
+		err = fmt.Errorf("camera-mode packet has %d-byte payload, expected %d", len(packet.Payload), cameraModePayloadSize)
+		return
+	}
+
+	var value int64 = int64(binary.LittleEndian.Uint32(packet.Payload))
+	event = Event{Clock: packet.Clock, Type: CameraModeEvent, Scalar: &Scalar{Integer: &value}}
+	return
+}
+
+// decodeCruiseState decodes a cruise-control key and value update.
+func decodeCruiseState(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != cruiseStatePayloadSize {
+		err = fmt.Errorf("cruise-state packet has %d-byte payload, expected %d", len(packet.Payload), cruiseStatePayloadSize)
+		return
+	}
+
+	event = Event{
+		Clock:  packet.Clock,
+		Type:   CruiseStateEvent,
+		Cruise: &CruiseState{Key: binary.LittleEndian.Uint32(packet.Payload[0:4]), Value: int32(binary.LittleEndian.Uint32(packet.Payload[4:8]))},
+	}
+	return
+}
+
+// decodeShotTracking decodes a player ship shot-tracking value.
+func decodeShotTracking(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != shotTrackingPayloadSize {
+		err = fmt.Errorf("shot-tracking packet has %d-byte payload, expected %d", len(packet.Payload), shotTrackingPayloadSize)
+		return
+	}
+
+	var value int64 = int64(binary.LittleEndian.Uint64(packet.Payload[4:12]))
+	event = Event{Clock: packet.Clock, Type: ShotTrackingEvent, EntityID: binary.LittleEndian.Uint32(packet.Payload[0:4]), Scalar: &Scalar{Integer: &value}}
 	return
 }
 
