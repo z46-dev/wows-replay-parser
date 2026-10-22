@@ -11,15 +11,20 @@ import (
 )
 
 const (
-	positionPacketType      uint32 = 10
-	entityCreatePacketType  uint32 = 5
-	entityControlPacketType uint32 = 2
-	ownedShipPacketType     uint32 = 32
-	playerOrientationType   uint32 = 44
-	battleResultsPacketType uint32 = 34
-	positionPayloadSize            = 45
-	orientationPayloadSize         = 32
-	entityCreateHeaderSize         = 42
+	positionPacketType       uint32 = 10
+	entityCreatePacketType   uint32 = 5
+	entityControlPacketType  uint32 = 2
+	entityPropertyPacketType uint32 = 7
+	entityMethodPacketType   uint32 = 8
+	ownedShipPacketType      uint32 = 32
+	playerOrientationType    uint32 = 44
+	battleResultsPacketType  uint32 = 34
+	nestedPropertyPacketType uint32 = 35
+	positionPayloadSize             = 45
+	orientationPayloadSize          = 32
+	entityCreateHeaderSize          = 42
+	entityMemberHeaderSize          = 12
+	nestedPropertyHeaderSize        = 9
 )
 
 type (
@@ -55,6 +60,13 @@ type (
 		StateSize    uint32    `json:"stateSize"`
 	}
 
+	// EntityMember records the stable envelope around a type-specific property or method payload.
+	EntityMember struct {
+		MemberID    uint32 `json:"memberID"`
+		PayloadSize uint32 `json:"payloadSize"`
+		IsSlice     *bool  `json:"isSlice,omitempty"`
+	}
+
 	// Event is one decoded replay event at a game clock value.
 	Event struct {
 		Clock      float32        `json:"clock"`
@@ -64,6 +76,7 @@ type (
 		Controlled *bool          `json:"controlled,omitempty"`
 		Position   *Position      `json:"position,omitempty"`
 		Created    *EntityCreate  `json:"created,omitempty"`
+		Member     *EntityMember  `json:"member,omitempty"`
 		Results    *BattleResults `json:"results,omitempty"`
 	}
 
@@ -81,6 +94,15 @@ const (
 
 	// EntityCreateEvent identifies an entity's initial replay envelope.
 	EntityCreateEvent Type = "entity_create"
+
+	// EntityPropertyEvent identifies a type-specific property update envelope.
+	EntityPropertyEvent Type = "entity_property"
+
+	// EntityMethodEvent identifies a type-specific method invocation envelope.
+	EntityMethodEvent Type = "entity_method"
+
+	// NestedPropertyEvent identifies a type-specific nested property update envelope.
+	NestedPropertyEvent Type = "nested_property_update"
 
 	// EntityControlEvent identifies a client entity-control change.
 	EntityControlEvent Type = "entity_control"
@@ -108,6 +130,20 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 		switch packet.Type {
 		case entityCreatePacketType:
 			if event, err = decodeEntityCreate(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case entityPropertyPacketType:
+			if event, err = decodeEntityMember(packet, EntityPropertyEvent); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case entityMethodPacketType:
+			if event, err = decodeEntityMember(packet, EntityMethodEvent); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
 				return
 			}
@@ -149,9 +185,77 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 			}
 
 			timeline.Events = append(timeline.Events, event)
+		case nestedPropertyPacketType:
+			if event, err = decodeNestedProperty(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
 		default:
 			timeline.UnknownPackets[packet.Type]++
 		}
+	}
+
+	return
+}
+
+// decodeEntityMember decodes the common fixed envelope around entity property and method payloads.
+func decodeEntityMember(packet replayparser.Packet, eventType Type) (event Event, err error) {
+	if len(packet.Payload) < entityMemberHeaderSize {
+		err = fmt.Errorf("%s packet has %d-byte payload, expected at least %d", eventType, len(packet.Payload), entityMemberHeaderSize)
+		return
+	}
+
+	var payload []byte = packet.Payload
+	var payloadSize uint32 = binary.LittleEndian.Uint32(payload[8:12])
+	if uint64(payloadSize) != uint64(len(payload)-entityMemberHeaderSize) {
+		err = fmt.Errorf("%s payload length does not match packet", eventType)
+		return
+	}
+
+	event = Event{
+		Clock:    packet.Clock,
+		Type:     eventType,
+		EntityID: binary.LittleEndian.Uint32(payload[0:4]),
+		Member: &EntityMember{
+			MemberID:    binary.LittleEndian.Uint32(payload[4:8]),
+			PayloadSize: payloadSize,
+		},
+	}
+
+	return
+}
+
+// decodeNestedProperty decodes the stable nested-property envelope before its type-specific payload.
+func decodeNestedProperty(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) < nestedPropertyHeaderSize {
+		err = fmt.Errorf("nested-property packet has %d-byte payload, expected at least %d", len(packet.Payload), nestedPropertyHeaderSize)
+		return
+	}
+
+	var payload []byte = packet.Payload
+	var flags byte = payload[4]
+	if flags&0xfe != 0 {
+		err = fmt.Errorf("nested-property packet has invalid flags %d", flags)
+		return
+	}
+
+	var payloadSize uint32 = binary.LittleEndian.Uint32(payload[5:9])
+	if uint64(payloadSize) != uint64(len(payload)-nestedPropertyHeaderSize) {
+		err = fmt.Errorf("nested-property payload length does not match packet")
+		return
+	}
+
+	var isSlice bool = flags == 1
+	event = Event{
+		Clock:    packet.Clock,
+		Type:     NestedPropertyEvent,
+		EntityID: binary.LittleEndian.Uint32(payload[0:4]),
+		Member: &EntityMember{
+			PayloadSize: payloadSize,
+			IsSlice:     &isSlice,
+		},
 	}
 
 	return
