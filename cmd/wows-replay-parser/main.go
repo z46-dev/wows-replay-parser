@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 
 	"github.com/alexflint/go-arg"
 	replayparser "github.com/z46-dev/wows-replay-parser"
@@ -89,22 +88,6 @@ func inspectReplay(args arguments) (err error) {
 		return
 	}
 
-	var packetCounts map[uint32]int = make(map[uint32]int)
-	for _, packet := range replay.Packets {
-		packetCounts[packet.Type]++
-	}
-
-	var packetTypes []uint32 = make([]uint32, 0, len(packetCounts))
-	for packetType := range packetCounts {
-		packetTypes = append(packetTypes, packetType)
-	}
-
-	slices.Sort(packetTypes)
 	fmt.Printf("Replay: %s\nClient version: %s\nRecorded at: %s\nPlayer: %s\nShip: %s\nMap: %s (%s, ID %d)\nBattle: %s / %s / %s (mode %d)\nTeams: %d x %d players\nDuration: %d seconds (battle limit %d seconds)\nPackets: %d\n", args.ReplayPath, replay.ClientVersion, replay.Metadata.DateTime, replay.Metadata.PlayerName, replay.Metadata.PlayerVehicle, replay.Metadata.MapDisplayName, replay.Metadata.MapName, replay.Metadata.MapID, replay.Metadata.GameType, replay.Metadata.MatchGroup, replay.Metadata.Scenario, replay.Metadata.GameMode, replay.Metadata.TeamsCount, replay.Metadata.PlayersPerTeam, replay.Metadata.Duration, replay.Metadata.BattleDuration, len(replay.Packets))
-
-	for _, packetType := range packetTypes {
-		fmt.Printf("Packet type %d: %d\n", packetType, packetCounts[packetType])
-	}
-
 	return
 }
