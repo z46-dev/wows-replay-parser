@@ -12,43 +12,58 @@ import (
 )
 
 const (
-	positionPacketType        uint32 = 10
-	entityCreatePacketType    uint32 = 5
-	entityControlPacketType   uint32 = 2
-	entityLeavePacketType     uint32 = 4
-	entityPropertyPacketType  uint32 = 7
-	entityMethodPacketType    uint32 = 8
-	serverTickPacketType      uint32 = 14
-	serverTimestampPacketType uint32 = 15
-	initFlagPacketType        uint32 = 16
-	initMarkerPacketType      uint32 = 19
-	versionPacketType         uint32 = 22
-	gunMarkerPacketType       uint32 = 24
-	playerNetStatsPacketType  uint32 = 29
-	ownedShipPacketType       uint32 = 32
-	playerOrientationType     uint32 = 44
-	battleResultsPacketType   uint32 = 34
-	nestedPropertyPacketType  uint32 = 35
-	nonVolatilePacketType     uint32 = 42
-	cameraPacketType          uint32 = 37
-	cameraModePacketType      uint32 = 39
-	weaponLockPacketType      uint32 = 48
-	cruiseStatePacketType     uint32 = 50
-	shotTrackingPacketType    uint32 = 51
-	positionPayloadSize              = 45
-	orientationPayloadSize           = 32
-	entityCreateHeaderSize           = 42
-	entityMemberHeaderSize           = 12
-	nestedPropertyHeaderSize         = 9
-	nonVolatilePayloadSize           = 32
-	weaponLockPayloadSize            = 12
-	gunMarkerPayloadSize             = 52
-	cameraPayloadSize                = 60
-	playerNetStatsPayloadSize        = 4
-	float64PayloadSize               = 8
-	cameraModePayloadSize            = 4
-	cruiseStatePayloadSize           = 8
-	shotTrackingPayloadSize          = 12
+	basePlayerCreatePacketType uint32 = 0
+	cellPlayerCreatePacketType uint32 = 1
+	positionPacketType         uint32 = 10
+	entityEnterPacketType      uint32 = 3
+	entityCreatePacketType     uint32 = 5
+	entityControlPacketType    uint32 = 2
+	entityLeavePacketType      uint32 = 4
+	entityPropertyPacketType   uint32 = 7
+	entityMethodPacketType     uint32 = 8
+	serverTickPacketType       uint32 = 14
+	serverTimestampPacketType  uint32 = 15
+	initFlagPacketType         uint32 = 16
+	initMarkerPacketType       uint32 = 19
+	versionPacketType          uint32 = 22
+	gunMarkerPacketType        uint32 = 24
+	playerNetStatsPacketType   uint32 = 29
+	ownedShipPacketType        uint32 = 32
+	playerOrientationType      uint32 = 44
+	battleResultsPacketType    uint32 = 34
+	nestedPropertyPacketType   uint32 = 35
+	nonVolatilePacketType      uint32 = 42
+	cameraPacketType           uint32 = 37
+	cameraModePacketType       uint32 = 39
+	mapPacketType              uint32 = 40
+	cameraFreeLookPacketType   uint32 = 47
+	weaponLockPacketType       uint32 = 48
+	subControllerPacketType    uint32 = 49
+	cruiseStatePacketType      uint32 = 50
+	shotTrackingPacketType     uint32 = 51
+	basePlayerCreateStubType   uint32 = 38
+	replayMarkerPacketType     uint32 = math.MaxUint32
+	basePlayerHeaderSize              = 10
+	cellPlayerHeaderSize              = 40
+	entityEnterPayloadSize            = 12
+	mapPacketHeaderSize               = 152
+	mapPacketTrailerSize              = 65
+	positionPayloadSize               = 45
+	orientationPayloadSize            = 32
+	entityCreateHeaderSize            = 42
+	entityMemberHeaderSize            = 12
+	nestedPropertyHeaderSize          = 9
+	nonVolatilePayloadSize            = 32
+	weaponLockPayloadSize             = 12
+	gunMarkerPayloadSize              = 52
+	cameraPayloadSize                 = 60
+	playerNetStatsPayloadSize         = 4
+	float64PayloadSize                = 8
+	cameraModePayloadSize             = 4
+	cruiseStatePayloadSize            = 8
+	shotTrackingPayloadSize           = 12
+	cameraFreeLookPayloadSize         = 1
+	subControllerPayloadSize          = 2
 )
 
 type (
@@ -127,6 +142,28 @@ type (
 		StateSize    uint32    `json:"stateSize"`
 	}
 
+	// EntityBootstrap records the base or cell state supplied before an entity enters the world.
+	EntityBootstrap struct {
+		EntityTypeID uint16    `json:"entityTypeID,omitempty"`
+		SpaceID      uint32    `json:"spaceID,omitempty"`
+		VehicleID    uint32    `json:"vehicleID,omitempty"`
+		Position     *Position `json:"position,omitempty"`
+		StateSize    uint32    `json:"stateSize"`
+		State        []byte    `json:"state,omitempty"`
+	}
+
+	// MapState records the map metadata and fixed map-transform data for the replay space.
+	MapState struct {
+		SpaceID   uint32 `json:"spaceID"`
+		ArenaID   int64  `json:"arenaID"`
+		Unknown1  uint32 `json:"unknown1"`
+		Unknown2  uint32 `json:"unknown2"`
+		Blob      []byte `json:"blob"`
+		Name      string `json:"name"`
+		Matrix    []byte `json:"matrix"`
+		IsUnknown bool   `json:"isUnknown"`
+	}
+
 	// EntityMember records the stable envelope around a type-specific property or method payload.
 	EntityMember struct {
 		MemberID    uint32 `json:"memberID"`
@@ -188,21 +225,24 @@ type (
 
 	// Event is one decoded replay event at a game clock value.
 	Event struct {
-		Clock      float32         `json:"clock"`
-		Type       Type            `json:"type"`
-		EntityID   uint32          `json:"entityID,omitempty"`
-		ParentID   uint32          `json:"parentID,omitempty"`
-		Controlled *bool           `json:"controlled,omitempty"`
-		Position   *Position       `json:"position,omitempty"`
-		Created    *EntityCreate   `json:"created,omitempty"`
-		Member     *EntityMember   `json:"member,omitempty"`
-		WeaponLock *WeaponLock     `json:"weaponLock,omitempty"`
-		GunMarker  *GunMarker      `json:"gunMarker,omitempty"`
-		Camera     *Camera         `json:"camera,omitempty"`
-		NetStats   *PlayerNetStats `json:"netStats,omitempty"`
-		Scalar     *Scalar         `json:"scalar,omitempty"`
-		Cruise     *CruiseState    `json:"cruise,omitempty"`
-		Results    *BattleResults  `json:"results,omitempty"`
+		Clock      float32          `json:"clock"`
+		Type       Type             `json:"type"`
+		EntityID   uint32           `json:"entityID,omitempty"`
+		ParentID   uint32           `json:"parentID,omitempty"`
+		Controlled *bool            `json:"controlled,omitempty"`
+		Position   *Position        `json:"position,omitempty"`
+		Created    *EntityCreate    `json:"created,omitempty"`
+		Bootstrap  *EntityBootstrap `json:"bootstrap,omitempty"`
+		Member     *EntityMember    `json:"member,omitempty"`
+		Map        *MapState        `json:"map,omitempty"`
+		Payload    []byte           `json:"payload,omitempty"`
+		WeaponLock *WeaponLock      `json:"weaponLock,omitempty"`
+		GunMarker  *GunMarker       `json:"gunMarker,omitempty"`
+		Camera     *Camera          `json:"camera,omitempty"`
+		NetStats   *PlayerNetStats  `json:"netStats,omitempty"`
+		Scalar     *Scalar          `json:"scalar,omitempty"`
+		Cruise     *CruiseState     `json:"cruise,omitempty"`
+		Results    *BattleResults   `json:"results,omitempty"`
 	}
 
 	// Timeline contains decoded events and packet types that do not yet have event decoders.
@@ -219,6 +259,18 @@ const (
 
 	// EntityCreateEvent identifies an entity's initial replay envelope.
 	EntityCreateEvent Type = "entity_create"
+
+	// BasePlayerCreateEvent identifies an entity's base property bootstrap envelope.
+	BasePlayerCreateEvent Type = "base_player_create"
+
+	// BasePlayerCreateStubEvent identifies a base bootstrap with no decoded properties.
+	BasePlayerCreateStubEvent Type = "base_player_create_stub"
+
+	// CellPlayerCreateEvent identifies an entity's cell property bootstrap envelope.
+	CellPlayerCreateEvent Type = "cell_player_create"
+
+	// EntityEnterEvent identifies an entity entering a replay space.
+	EntityEnterEvent Type = "entity_enter"
 
 	// EntityLeaveEvent identifies an entity leaving the replay space.
 	EntityLeaveEvent Type = "entity_leave"
@@ -265,6 +317,15 @@ const (
 	// CameraModeEvent identifies the active camera mode.
 	CameraModeEvent Type = "camera_mode"
 
+	// MapEvent identifies map metadata for the replay space.
+	MapEvent Type = "map"
+
+	// CameraFreeLookEvent identifies a camera free-look state change.
+	CameraFreeLookEvent Type = "camera_free_look"
+
+	// SubControllerEvent identifies a submarine controller state change.
+	SubControllerEvent Type = "sub_controller"
+
 	// CruiseStateEvent identifies a cruise-control update.
 	CruiseStateEvent Type = "cruise_state"
 
@@ -282,6 +343,9 @@ const (
 
 	// BattleResultsEvent identifies the replay's final results payload.
 	BattleResultsEvent Type = "battle_results"
+
+	// ReplayMarkerEvent identifies an untyped replay stream marker.
+	ReplayMarkerEvent Type = "replay_marker"
 )
 
 // Decode converts supported packet payloads into a timeline without discarding unknown packets.
@@ -295,6 +359,34 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 		var event Event
 
 		switch packet.Type {
+		case basePlayerCreatePacketType:
+			if event, err = decodeBasePlayerCreate(packet, BasePlayerCreateEvent); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case basePlayerCreateStubType:
+			if event, err = decodeBasePlayerCreate(packet, BasePlayerCreateStubEvent); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case cellPlayerCreatePacketType:
+			if event, err = decodeCellPlayerCreate(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case entityEnterPacketType:
+			if event, err = decodeEntityEnter(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
 		case serverTickPacketType:
 			if event, err = decodeFloat64(packet, ServerTickEvent); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
@@ -436,8 +528,29 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 			}
 
 			timeline.Events = append(timeline.Events, event)
+		case mapPacketType:
+			if event, err = decodeMap(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case cameraFreeLookPacketType:
+			if event, err = decodeCameraFreeLook(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
 		case weaponLockPacketType:
 			if event, err = decodeWeaponLock(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case subControllerPacketType:
+			if event, err = decodeSubController(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
 				return
 			}
@@ -457,9 +570,101 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 			}
 
 			timeline.Events = append(timeline.Events, event)
+		case replayMarkerPacketType:
+			event = Event{Clock: packet.Clock, Type: ReplayMarkerEvent, Payload: packet.Payload}
+			timeline.Events = append(timeline.Events, event)
 		default:
 			timeline.UnknownPackets[packet.Type]++
 		}
+	}
+
+	return
+}
+
+// decodeBasePlayerCreate decodes a base entity bootstrap and preserves its schema-specific state.
+func decodeBasePlayerCreate(packet replayparser.Packet, eventType Type) (event Event, err error) {
+	if len(packet.Payload) < basePlayerHeaderSize {
+		err = fmt.Errorf("%s packet has %d-byte payload, expected at least %d", eventType, len(packet.Payload), basePlayerHeaderSize)
+		return
+	}
+
+	var (
+		payload   []byte = packet.Payload
+		stateSize uint32 = binary.LittleEndian.Uint32(packet.Payload[6:10])
+	)
+	if uint64(stateSize) != uint64(len(payload)-basePlayerHeaderSize) {
+		err = fmt.Errorf("%s state length does not match packet", eventType)
+		return
+	}
+
+	event = Event{
+		Clock:    packet.Clock,
+		Type:     eventType,
+		EntityID: binary.LittleEndian.Uint32(payload[0:4]),
+		Bootstrap: &EntityBootstrap{
+			EntityTypeID: binary.LittleEndian.Uint16(payload[4:6]),
+			StateSize:    stateSize,
+			State:        payload[basePlayerHeaderSize:],
+		},
+	}
+
+	return
+}
+
+// decodeCellPlayerCreate decodes an entity's cell bootstrap and preserves its schema-specific state.
+func decodeCellPlayerCreate(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) < cellPlayerHeaderSize {
+		err = fmt.Errorf("cell-player-create packet has %d-byte payload, expected at least %d", len(packet.Payload), cellPlayerHeaderSize)
+		return
+	}
+
+	var (
+		payload   []byte = packet.Payload
+		stateSize uint32 = binary.LittleEndian.Uint32(payload[36:40])
+	)
+	if uint64(stateSize) != uint64(len(payload)-cellPlayerHeaderSize) {
+		err = fmt.Errorf("cell-player-create state length does not match packet")
+		return
+	}
+
+	event = Event{
+		Clock:    packet.Clock,
+		Type:     CellPlayerCreateEvent,
+		EntityID: binary.LittleEndian.Uint32(payload[0:4]),
+		Bootstrap: &EntityBootstrap{
+			SpaceID:   binary.LittleEndian.Uint32(payload[4:8]),
+			VehicleID: binary.LittleEndian.Uint32(payload[8:12]),
+			Position: &Position{
+				X:     float32At(payload, 12),
+				Y:     float32At(payload, 16),
+				Z:     float32At(payload, 20),
+				Yaw:   float32At(payload, 24),
+				Pitch: float32At(payload, 28),
+				Roll:  float32At(payload, 32),
+			},
+			StateSize: stateSize,
+			State:     payload[cellPlayerHeaderSize:],
+		},
+	}
+
+	return
+}
+
+// decodeEntityEnter decodes an entity entering a replay space.
+func decodeEntityEnter(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != entityEnterPayloadSize {
+		err = fmt.Errorf("entity-enter packet has %d-byte payload, expected %d", len(packet.Payload), entityEnterPayloadSize)
+		return
+	}
+
+	event = Event{
+		Clock:    packet.Clock,
+		Type:     EntityEnterEvent,
+		EntityID: binary.LittleEndian.Uint32(packet.Payload[0:4]),
+		Bootstrap: &EntityBootstrap{
+			SpaceID:   binary.LittleEndian.Uint32(packet.Payload[4:8]),
+			VehicleID: binary.LittleEndian.Uint32(packet.Payload[8:12]),
+		},
 	}
 
 	return
@@ -729,6 +934,71 @@ func decodeCameraMode(packet replayparser.Packet) (event Event, err error) {
 
 	var value int64 = int64(binary.LittleEndian.Uint32(packet.Payload))
 	event = Event{Clock: packet.Clock, Type: CameraModeEvent, Scalar: &Scalar{Integer: &value}}
+	return
+}
+
+// decodeMap decodes replay-space map metadata, retaining opaque fixed protocol fields.
+func decodeMap(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) < mapPacketHeaderSize+mapPacketTrailerSize {
+		err = fmt.Errorf("map packet has %d-byte payload, expected at least %d", len(packet.Payload), mapPacketHeaderSize+mapPacketTrailerSize)
+		return
+	}
+
+	var (
+		payload  []byte = packet.Payload
+		nameSize uint32 = binary.LittleEndian.Uint32(payload[148:152])
+		offset   uint64 = mapPacketHeaderSize + uint64(nameSize)
+	)
+	if offset+mapPacketTrailerSize != uint64(len(payload)) {
+		err = fmt.Errorf("map name length does not match packet")
+		return
+	}
+
+	var nameData []byte = payload[mapPacketHeaderSize:offset]
+	if !utf8.Valid(nameData) {
+		err = fmt.Errorf("map name is not valid UTF-8")
+		return
+	}
+
+	event = Event{
+		Clock: packet.Clock,
+		Type:  MapEvent,
+		Map: &MapState{
+			SpaceID:   binary.LittleEndian.Uint32(payload[0:4]),
+			ArenaID:   int64(binary.LittleEndian.Uint64(payload[4:12])),
+			Unknown1:  binary.LittleEndian.Uint32(payload[12:16]),
+			Unknown2:  binary.LittleEndian.Uint32(payload[16:20]),
+			Blob:      payload[20:148],
+			Name:      string(nameData),
+			Matrix:    payload[offset : offset+64],
+			IsUnknown: payload[offset+64] != 0,
+		},
+	}
+
+	return
+}
+
+// decodeCameraFreeLook decodes the camera free-look state flag.
+func decodeCameraFreeLook(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != cameraFreeLookPayloadSize {
+		err = fmt.Errorf("camera-free-look packet has %d-byte payload, expected %d", len(packet.Payload), cameraFreeLookPayloadSize)
+		return
+	}
+
+	var value int64 = int64(packet.Payload[0])
+	event = Event{Clock: packet.Clock, Type: CameraFreeLookEvent, Scalar: &Scalar{Integer: &value}}
+	return
+}
+
+// decodeSubController decodes the submarine controller mode.
+func decodeSubController(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != subControllerPayloadSize {
+		err = fmt.Errorf("sub-controller packet has %d-byte payload, expected %d", len(packet.Payload), subControllerPayloadSize)
+		return
+	}
+
+	var value int64 = int64(int16(binary.LittleEndian.Uint16(packet.Payload)))
+	event = Event{Clock: packet.Clock, Type: SubControllerEvent, Scalar: &Scalar{Integer: &value}}
 	return
 }
 
