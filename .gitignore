@@ -31,3 +31,10 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Project Specific
+graphify-out/
+references/
+.codex/
+*.toml
+*.db
