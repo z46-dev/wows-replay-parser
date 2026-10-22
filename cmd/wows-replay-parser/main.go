@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -8,12 +9,16 @@ import (
 
 	"github.com/alexflint/go-arg"
 	replayparser "github.com/z46-dev/wows-replay-parser"
+	"github.com/z46-dev/wows-replay-parser/events"
 )
 
 const maxReplayFileSize int64 = 256 << 20
 
 type arguments struct {
 	ReplayPath string `arg:"positional,required" placeholder:"REPLAY" help:"Path to a .wowsreplay file"`
+	EventsJSON bool   `arg:"--events-json" help:"Write decoded events as JSON instead of the replay summary"`
+	EventType  string `arg:"--event-type" placeholder:"TYPE" help:"Filter JSON events by type"`
+	EntityID   uint32 `arg:"--entity-id" placeholder:"ID" help:"Filter JSON events by entity ID"`
 }
 
 // Description explains the current replay inspection command.
@@ -30,16 +35,16 @@ func main() {
 
 	arg.MustParse(&args)
 
-	if err = inspectReplay(args.ReplayPath); err != nil {
+	if err = inspectReplay(args); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 // inspectReplay parses a replay and prints its metadata and raw packet-type counts.
-func inspectReplay(path string) (err error) {
+func inspectReplay(args arguments) (err error) {
 	var file *os.File
-	if file, err = os.Open(path); err != nil {
+	if file, err = os.Open(args.ReplayPath); err != nil {
 		return
 	}
 
@@ -55,6 +60,17 @@ func inspectReplay(path string) (err error) {
 		return
 	}
 
+	if args.EventsJSON {
+		var timeline *events.Timeline
+		if timeline, err = events.Decode(replay); err != nil {
+			return
+		}
+
+		timeline.Events = events.Filter(timeline.Events, events.Type(args.EventType), args.EntityID)
+		err = json.NewEncoder(os.Stdout).Encode(timeline)
+		return
+	}
+
 	var packetCounts map[uint32]int = make(map[uint32]int)
 	for _, packet := range replay.Packets {
 		packetCounts[packet.Type]++
@@ -66,6 +82,6 @@ func inspectReplay(path string) (err error) {
 	}
 
 	slices.Sort(packetTypes)
-	fmt.Printf("Replay: %s\nClient version: %s\nRecorded at: %s\nPlayer: %s\nShip: %s\nMap: %s (%s, ID %d)\nBattle: %s / %s / %s (mode %d)\nTeams: %d x %d players\nDuration: %d seconds (battle limit %d seconds)\nPackets: %d\n", path, replay.ClientVersion, replay.Metadata.DateTime, replay.Metadata.PlayerName, replay.Metadata.PlayerVehicle, replay.Metadata.MapDisplayName, replay.Metadata.MapName, replay.Metadata.MapID, replay.Metadata.GameType, replay.Metadata.MatchGroup, replay.Metadata.Scenario, replay.Metadata.GameMode, replay.Metadata.TeamsCount, replay.Metadata.PlayersPerTeam, replay.Metadata.Duration, replay.Metadata.BattleDuration)
+	fmt.Printf("Replay: %s\nClient version: %s\nRecorded at: %s\nPlayer: %s\nShip: %s\nMap: %s (%s, ID %d)\nBattle: %s / %s / %s (mode %d)\nTeams: %d x %d players\nDuration: %d seconds (battle limit %d seconds)\nPackets: %d\n", args.ReplayPath, replay.ClientVersion, replay.Metadata.DateTime, replay.Metadata.PlayerName, replay.Metadata.PlayerVehicle, replay.Metadata.MapDisplayName, replay.Metadata.MapName, replay.Metadata.MapID, replay.Metadata.GameType, replay.Metadata.MatchGroup, replay.Metadata.Scenario, replay.Metadata.GameMode, replay.Metadata.TeamsCount, replay.Metadata.PlayersPerTeam, replay.Metadata.Duration, replay.Metadata.BattleDuration, len(replay.Packets))
 	return
 }
