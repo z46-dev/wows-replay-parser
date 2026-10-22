@@ -22,3 +22,5 @@ fmt.Printf("%s: %d packets\n", replay.ClientVersion, len(replay.Packets))
 Version descriptors are kept in `internal/replayformat/v*.go`; shared parsing remains in the root package. Run `go test ./...` to parse the checked-in 15.8 and 15.9 fixture replays.
 
 The initial CLI is in `cmd/wows-replay-parser`. Run it with `go run ./cmd/wows-replay-parser path/to/replay.wowsreplay`; it prints replay metadata and packet-type counts. Use `--events-json` to export decoded events, optionally filtered with `--event-type entity_create`, `--event-type entity_property`, `--event-type entity_method`, `--event-type weapon_lock`, `--entity-id ID`, or `--my-ship` for player-ship movement updates. Property and method events expose validated envelopes and base64-encoded raw payloads; decoding their payloads requires build-specific entity definitions.
+
+Filter with `--event-type battle_results` to export verified post-battle summaries, including match outcome and duration plus public player statistics such as remaining health, kills, damage, spotting damage, and killer IDs. The original result JSON remains available alongside the typed summary.
