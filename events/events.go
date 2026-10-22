@@ -14,17 +14,22 @@ const (
 	positionPacketType       uint32 = 10
 	entityCreatePacketType   uint32 = 5
 	entityControlPacketType  uint32 = 2
+	entityLeavePacketType    uint32 = 4
 	entityPropertyPacketType uint32 = 7
 	entityMethodPacketType   uint32 = 8
 	ownedShipPacketType      uint32 = 32
 	playerOrientationType    uint32 = 44
 	battleResultsPacketType  uint32 = 34
 	nestedPropertyPacketType uint32 = 35
+	nonVolatilePacketType    uint32 = 42
+	weaponLockPacketType     uint32 = 48
 	positionPayloadSize             = 45
 	orientationPayloadSize          = 32
 	entityCreateHeaderSize          = 42
 	entityMemberHeaderSize          = 12
 	nestedPropertyHeaderSize        = 9
+	nonVolatilePayloadSize          = 32
+	weaponLockPayloadSize           = 12
 )
 
 type (
@@ -67,6 +72,13 @@ type (
 		IsSlice     *bool  `json:"isSlice,omitempty"`
 	}
 
+	// WeaponLock records the player's target lock state for one weapon type.
+	WeaponLock struct {
+		WeaponType uint32 `json:"weaponType"`
+		LockType   uint32 `json:"lockType"`
+		TargetID   uint32 `json:"targetID"`
+	}
+
 	// Event is one decoded replay event at a game clock value.
 	Event struct {
 		Clock      float32        `json:"clock"`
@@ -77,6 +89,7 @@ type (
 		Position   *Position      `json:"position,omitempty"`
 		Created    *EntityCreate  `json:"created,omitempty"`
 		Member     *EntityMember  `json:"member,omitempty"`
+		WeaponLock *WeaponLock    `json:"weaponLock,omitempty"`
 		Results    *BattleResults `json:"results,omitempty"`
 	}
 
@@ -95,6 +108,9 @@ const (
 	// EntityCreateEvent identifies an entity's initial replay envelope.
 	EntityCreateEvent Type = "entity_create"
 
+	// EntityLeaveEvent identifies an entity leaving the replay space.
+	EntityLeaveEvent Type = "entity_leave"
+
 	// EntityPropertyEvent identifies a type-specific property update envelope.
 	EntityPropertyEvent Type = "entity_property"
 
@@ -103,6 +119,12 @@ const (
 
 	// NestedPropertyEvent identifies a type-specific nested property update envelope.
 	NestedPropertyEvent Type = "nested_property_update"
+
+	// NonVolatilePositionEvent identifies an entity transform update without a direction vector.
+	NonVolatilePositionEvent Type = "nonvolatile_position"
+
+	// WeaponLockEvent identifies a weapon system target-lock change.
+	WeaponLockEvent Type = "weapon_lock"
 
 	// EntityControlEvent identifies a client entity-control change.
 	EntityControlEvent Type = "entity_control"
@@ -128,6 +150,13 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 		var event Event
 
 		switch packet.Type {
+		case entityLeavePacketType:
+			if event, err = decodeEntityLeave(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
 		case entityCreatePacketType:
 			if event, err = decodeEntityCreate(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
@@ -187,6 +216,20 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 			timeline.Events = append(timeline.Events, event)
 		case nestedPropertyPacketType:
 			if event, err = decodeNestedProperty(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case nonVolatilePacketType:
+			if event, err = decodeNonVolatilePosition(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case weaponLockPacketType:
+			if event, err = decodeWeaponLock(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
 				return
 			}
@@ -287,6 +330,63 @@ func decodeEntityCreate(packet replayparser.Packet) (event Event, err error) {
 			},
 			StateLength: binary.LittleEndian.Uint32(payload[38:42]),
 			StateSize:   uint32(len(payload) - entityCreateHeaderSize),
+		},
+	}
+
+	return
+}
+
+// decodeEntityLeave decodes an entity identifier leaving the replay space.
+func decodeEntityLeave(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != 4 {
+		err = fmt.Errorf("entity-leave packet has %d-byte payload, expected 4", len(packet.Payload))
+		return
+	}
+
+	event = Event{Clock: packet.Clock, Type: EntityLeaveEvent, EntityID: binary.LittleEndian.Uint32(packet.Payload)}
+	return
+}
+
+// decodeNonVolatilePosition decodes a position update without dead-reckoning direction.
+func decodeNonVolatilePosition(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != nonVolatilePayloadSize {
+		err = fmt.Errorf("nonvolatile-position packet has %d-byte payload, expected %d", len(packet.Payload), nonVolatilePayloadSize)
+		return
+	}
+
+	var payload []byte = packet.Payload
+	event = Event{
+		Clock:    packet.Clock,
+		Type:     NonVolatilePositionEvent,
+		EntityID: binary.LittleEndian.Uint32(payload[0:4]),
+		Position: &Position{
+			X:     math.Float32frombits(binary.LittleEndian.Uint32(payload[8:12])),
+			Y:     math.Float32frombits(binary.LittleEndian.Uint32(payload[12:16])),
+			Z:     math.Float32frombits(binary.LittleEndian.Uint32(payload[16:20])),
+			Yaw:   math.Float32frombits(binary.LittleEndian.Uint32(payload[20:24])),
+			Pitch: math.Float32frombits(binary.LittleEndian.Uint32(payload[24:28])),
+			Roll:  math.Float32frombits(binary.LittleEndian.Uint32(payload[28:32])),
+		},
+	}
+
+	return
+}
+
+// decodeWeaponLock decodes a weapon-system target-lock change.
+func decodeWeaponLock(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != weaponLockPayloadSize {
+		err = fmt.Errorf("weapon-lock packet has %d-byte payload, expected %d", len(packet.Payload), weaponLockPayloadSize)
+		return
+	}
+
+	var payload []byte = packet.Payload
+	event = Event{
+		Clock: packet.Clock,
+		Type:  WeaponLockEvent,
+		WeaponLock: &WeaponLock{
+			WeaponType: binary.LittleEndian.Uint32(payload[0:4]),
+			LockType:   binary.LittleEndian.Uint32(payload[4:8]),
+			TargetID:   binary.LittleEndian.Uint32(payload[8:12]),
 		},
 	}
 
