@@ -223,6 +223,13 @@ type (
 		Value int32  `json:"value"`
 	}
 
+	// ShipHealth records a vehicle health update and its change from the prior update.
+	ShipHealth struct {
+		Current  float32 `json:"current"`
+		Previous float32 `json:"previous,omitempty"`
+		Delta    float32 `json:"delta"`
+	}
+
 	// Event is one decoded replay event at a game clock value.
 	Event struct {
 		Clock      float32          `json:"clock"`
@@ -242,6 +249,7 @@ type (
 		NetStats   *PlayerNetStats  `json:"netStats,omitempty"`
 		Scalar     *Scalar          `json:"scalar,omitempty"`
 		Cruise     *CruiseState     `json:"cruise,omitempty"`
+		Health     *ShipHealth      `json:"health,omitempty"`
 		Results    *BattleResults   `json:"results,omitempty"`
 	}
 
@@ -332,6 +340,12 @@ const (
 	// ShotTrackingEvent identifies a player ship's shot-tracking update.
 	ShotTrackingEvent Type = "shot_tracking"
 
+	// ShipHealthEvent identifies a verified vehicle health property update.
+	ShipHealthEvent Type = "ship_health"
+
+	// ShipDamageEvent identifies a verified negative vehicle health delta.
+	ShipDamageEvent Type = "ship_damage"
+
 	// EntityControlEvent identifies a client entity-control change.
 	EntityControlEvent Type = "entity_control"
 
@@ -354,6 +368,11 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 		Events:         make([]Event, 0),
 		UnknownPackets: make(map[uint32]int),
 	}
+
+	var (
+		entityTypes map[uint32]uint16  = make(map[uint32]uint16)
+		shipHealth  map[uint32]float32 = make(map[uint32]float32)
+	)
 
 	for index, packet := range replay.Packets {
 		var event Event
@@ -449,6 +468,7 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 				return
 			}
 
+			entityTypes[event.EntityID] = event.Created.EntityTypeID
 			timeline.Events = append(timeline.Events, event)
 		case entityPropertyPacketType:
 			if event, err = decodeEntityMember(packet, EntityPropertyEvent); err != nil {
@@ -457,6 +477,19 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 			}
 
 			timeline.Events = append(timeline.Events, event)
+			if entityTypes[event.EntityID] == 2 && event.Member.MemberID == 28 && event.Member.PayloadSize == 4 {
+				var healthEvent Event
+				if healthEvent, err = decodeShipHealth(packet, event.EntityID, shipHealth); err != nil {
+					err = fmt.Errorf("packet %d: %w", index, err)
+					return
+				}
+
+				timeline.Events = append(timeline.Events, healthEvent)
+				if healthEvent.Health.Delta < 0 {
+					healthEvent.Type = ShipDamageEvent
+					timeline.Events = append(timeline.Events, healthEvent)
+				}
+			}
 		case entityMethodPacketType:
 			if event, err = decodeEntityMember(packet, EntityMethodEvent); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
@@ -695,6 +728,30 @@ func decodeEntityMember(packet replayparser.Packet, eventType Type) (event Event
 		},
 	}
 
+	return
+}
+
+// decodeShipHealth decodes the stable Vehicle health property and emits its delta.
+func decodeShipHealth(packet replayparser.Packet, entityID uint32, previous map[uint32]float32) (event Event, err error) {
+	if len(packet.Payload) != entityMemberHeaderSize+4 {
+		err = fmt.Errorf("ship-health packet has %d-byte payload, expected %d", len(packet.Payload), entityMemberHeaderSize+4)
+		return
+	}
+
+	var (
+		current  float32 = float32At(packet.Payload, entityMemberHeaderSize)
+		prior    float32
+		hasPrior bool
+		health   *ShipHealth
+	)
+	if prior, hasPrior = previous[entityID]; hasPrior {
+		health = &ShipHealth{Current: current, Previous: prior, Delta: current - prior}
+	} else {
+		health = &ShipHealth{Current: current}
+	}
+
+	previous[entityID] = current
+	event = Event{Clock: packet.Clock, Type: ShipHealthEvent, EntityID: entityID, Health: health}
 	return
 }
 
