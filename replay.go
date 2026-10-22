@@ -24,12 +24,24 @@ const (
 var replayKey = []byte{0x29, 0xb7, 0xc9, 0x09, 0x38, 0x3f, 0x84, 0x88, 0xfa, 0x98, 0xec, 0x4e, 0x13, 0x19, 0x79, 0xfb}
 
 type (
-	// Metadata contains the replay header fields used by the parser and callers.
+	// Metadata contains stable replay-header fields; Raw retains the complete header JSON.
 	Metadata struct {
 		ClientVersionFromExe string          `json:"clientVersionFromExe"`
 		ClientVersionFromXML string          `json:"clientVersionFromXml"`
+		DateTime             string          `json:"dateTime"`
+		GameType             string          `json:"gameType"`
+		MatchGroup           string          `json:"matchGroup"`
+		Scenario             string          `json:"scenario"`
+		MapDisplayName       string          `json:"mapDisplayName"`
 		MapName              string          `json:"mapName"`
+		MapID                int             `json:"mapId"`
 		PlayerName           string          `json:"playerName"`
+		PlayerVehicle        string          `json:"playerVehicle"`
+		PlayersPerTeam       int             `json:"playersPerTeam"`
+		TeamsCount           int             `json:"teamsCount"`
+		GameMode             int             `json:"gameMode"`
+		Duration             int             `json:"duration"`
+		BattleDuration       int             `json:"battleDuration"`
 		Raw                  json.RawMessage `json:"-"`
 	}
 

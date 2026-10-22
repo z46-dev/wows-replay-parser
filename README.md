@@ -4,7 +4,7 @@ A Go library for reading World of Warships replay files.
 
 ## Current support
 
-The root package parses the replay container and returns metadata and raw packet frames. It currently supports client builds 15.8.0.13187581 and 15.9.0.13357625. Gameplay-event decoding, statistics extraction, and video generation are not implemented yet.
+The root package parses the replay container and returns typed match-setup metadata plus raw packet frames. It currently supports client builds 15.8.0.13187581 and 15.9.0.13357625. The metadata header does not contain post-battle results in the inspected samples; gameplay-event decoding, results extraction, and video generation are not implemented yet.
 
 ```go
 data, err := os.ReadFile("battle.wowsreplay")

@@ -66,12 +66,6 @@ func inspectReplay(path string) (err error) {
 	}
 
 	slices.Sort(packetTypes)
-
-	fmt.Printf("Replay: %s\nClient version: %s\nPlayer: %s\nMap: %s\nPackets: %d\n", path, replay.ClientVersion, replay.Metadata.PlayerName, replay.Metadata.MapName, len(replay.Packets))
-	fmt.Println("Raw packet type counts:")
-	for _, packetType := range packetTypes {
-		fmt.Printf("  %d: %d\n", packetType, packetCounts[packetType])
-	}
-
+	fmt.Printf("Replay: %s\nClient version: %s\nRecorded at: %s\nPlayer: %s\nShip: %s\nMap: %s (%s, ID %d)\nBattle: %s / %s / %s (mode %d)\nTeams: %d x %d players\nDuration: %d seconds (battle limit %d seconds)\nPackets: %d\n", path, replay.ClientVersion, replay.Metadata.DateTime, replay.Metadata.PlayerName, replay.Metadata.PlayerVehicle, replay.Metadata.MapDisplayName, replay.Metadata.MapName, replay.Metadata.MapID, replay.Metadata.GameType, replay.Metadata.MatchGroup, replay.Metadata.Scenario, replay.Metadata.GameMode, replay.Metadata.TeamsCount, replay.Metadata.PlayersPerTeam, replay.Metadata.Duration, replay.Metadata.BattleDuration)
 	return
 }
