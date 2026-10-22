@@ -11,8 +11,8 @@ import (
 // TestDecodeSupportedBuildFixtures verifies the initial timeline decoders on both supported builds.
 func TestDecodeSupportedBuildFixtures(t *testing.T) {
 	var fixtures []string = []string{
-		"../testdata/replays/15.8_236883_Yamato.wowsreplay",
-		"../testdata/replays/15.9_20261011_201842.wowsreplay",
+		"../../testdata/replays/15.8_236883_Yamato.wowsreplay",
+		"../../testdata/replays/15.9_20261011_201842.wowsreplay",
 	}
 
 	for _, fixture := range fixtures {
