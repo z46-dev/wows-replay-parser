@@ -19,6 +19,7 @@ type arguments struct {
 	EventsJSON bool   `arg:"--events-json" help:"Write decoded events as JSON instead of the replay summary"`
 	EventType  string `arg:"--event-type" placeholder:"TYPE" help:"Filter JSON events by type"`
 	EntityID   uint32 `arg:"--entity-id" placeholder:"ID" help:"Filter JSON events by entity ID"`
+	MyShip     bool   `arg:"--my-ship" help:"Filter JSON events to player-ship orientation updates by default"`
 }
 
 // Description explains the current replay inspection command.
@@ -66,7 +67,24 @@ func inspectReplay(args arguments) (err error) {
 			return
 		}
 
-		timeline.Events = events.Filter(timeline.Events, events.Type(args.EventType), args.EntityID)
+		var (
+			entityID  uint32      = args.EntityID
+			eventType events.Type = events.Type(args.EventType)
+		)
+
+		if args.MyShip {
+			entityID = timeline.OwnShipID
+			if entityID == 0 {
+				err = fmt.Errorf("replay does not identify the player ship")
+				return
+			}
+
+			if eventType == "" {
+				eventType = events.PlayerOrientationEvent
+			}
+		}
+
+		timeline.Events = events.Filter(timeline.Events, eventType, entityID)
 		err = json.NewEncoder(os.Stdout).Encode(timeline)
 		return
 	}

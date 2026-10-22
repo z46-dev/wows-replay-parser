@@ -14,8 +14,10 @@ const (
 	positionPacketType      uint32 = 10
 	entityControlPacketType uint32 = 2
 	ownedShipPacketType     uint32 = 32
+	playerOrientationType   uint32 = 44
 	battleResultsPacketType uint32 = 34
 	positionPayloadSize            = 45
+	orientationPayloadSize         = 32
 )
 
 type (
@@ -46,6 +48,7 @@ type (
 		Clock      float32        `json:"clock"`
 		Type       Type           `json:"type"`
 		EntityID   uint32         `json:"entityID,omitempty"`
+		ParentID   uint32         `json:"parentID,omitempty"`
 		Controlled *bool          `json:"controlled,omitempty"`
 		Position   *Position      `json:"position,omitempty"`
 		Results    *BattleResults `json:"results,omitempty"`
@@ -68,6 +71,9 @@ const (
 
 	// OwnShipEvent identifies the ship controlled by the replaying player.
 	OwnShipEvent Type = "own_ship"
+
+	// PlayerOrientationEvent identifies a replay-player or camera transform update.
+	PlayerOrientationEvent Type = "player_orientation"
 
 	// BattleResultsEvent identifies the replay's final results payload.
 	BattleResultsEvent Type = "battle_results"
@@ -105,6 +111,13 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 			}
 
 			timeline.OwnShipID = event.EntityID
+			timeline.Events = append(timeline.Events, event)
+		case playerOrientationType:
+			if event, err = decodePlayerOrientation(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
 			timeline.Events = append(timeline.Events, event)
 		case battleResultsPacketType:
 			if event, err = decodeBattleResults(packet); err != nil {
@@ -174,6 +187,32 @@ func decodeOwnShip(packet replayparser.Packet) (event Event, err error) {
 		Clock:    packet.Clock,
 		Type:     OwnShipEvent,
 		EntityID: binary.LittleEndian.Uint32(packet.Payload),
+	}
+
+	return
+}
+
+// decodePlayerOrientation decodes the fixed player-or-camera orientation packet layout.
+func decodePlayerOrientation(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != orientationPayloadSize {
+		err = fmt.Errorf("player-orientation packet has %d-byte payload, expected %d", len(packet.Payload), orientationPayloadSize)
+		return
+	}
+
+	var payload []byte = packet.Payload
+	event = Event{
+		Clock:    packet.Clock,
+		Type:     PlayerOrientationEvent,
+		EntityID: binary.LittleEndian.Uint32(payload[0:4]),
+		ParentID: binary.LittleEndian.Uint32(payload[4:8]),
+		Position: &Position{
+			X:     math.Float32frombits(binary.LittleEndian.Uint32(payload[8:12])),
+			Y:     math.Float32frombits(binary.LittleEndian.Uint32(payload[12:16])),
+			Z:     math.Float32frombits(binary.LittleEndian.Uint32(payload[16:20])),
+			Yaw:   math.Float32frombits(binary.LittleEndian.Uint32(payload[20:24])),
+			Pitch: math.Float32frombits(binary.LittleEndian.Uint32(payload[24:28])),
+			Roll:  math.Float32frombits(binary.LittleEndian.Uint32(payload[28:32])),
+		},
 	}
 
 	return
