@@ -11,25 +11,31 @@ import (
 )
 
 const (
-	positionPacketType       uint32 = 10
-	entityCreatePacketType   uint32 = 5
-	entityControlPacketType  uint32 = 2
-	entityLeavePacketType    uint32 = 4
-	entityPropertyPacketType uint32 = 7
-	entityMethodPacketType   uint32 = 8
-	ownedShipPacketType      uint32 = 32
-	playerOrientationType    uint32 = 44
-	battleResultsPacketType  uint32 = 34
-	nestedPropertyPacketType uint32 = 35
-	nonVolatilePacketType    uint32 = 42
-	weaponLockPacketType     uint32 = 48
-	positionPayloadSize             = 45
-	orientationPayloadSize          = 32
-	entityCreateHeaderSize          = 42
-	entityMemberHeaderSize          = 12
-	nestedPropertyHeaderSize        = 9
-	nonVolatilePayloadSize          = 32
-	weaponLockPayloadSize           = 12
+	positionPacketType        uint32 = 10
+	entityCreatePacketType    uint32 = 5
+	entityControlPacketType   uint32 = 2
+	entityLeavePacketType     uint32 = 4
+	entityPropertyPacketType  uint32 = 7
+	entityMethodPacketType    uint32 = 8
+	gunMarkerPacketType       uint32 = 24
+	playerNetStatsPacketType  uint32 = 29
+	ownedShipPacketType       uint32 = 32
+	playerOrientationType     uint32 = 44
+	battleResultsPacketType   uint32 = 34
+	nestedPropertyPacketType  uint32 = 35
+	nonVolatilePacketType     uint32 = 42
+	cameraPacketType          uint32 = 37
+	weaponLockPacketType      uint32 = 48
+	positionPayloadSize              = 45
+	orientationPayloadSize           = 32
+	entityCreateHeaderSize           = 42
+	entityMemberHeaderSize           = 12
+	nestedPropertyHeaderSize         = 9
+	nonVolatilePayloadSize           = 32
+	weaponLockPayloadSize            = 12
+	gunMarkerPayloadSize             = 52
+	cameraPayloadSize                = 60
+	playerNetStatsPayloadSize        = 4
 )
 
 type (
@@ -123,18 +129,52 @@ type (
 		TargetID   uint32 `json:"targetID"`
 	}
 
+	// GunMarker records the player's aiming marker state.
+	GunMarker struct {
+		Target      Position `json:"target"`
+		Diameter    float32  `json:"diameter"`
+		Marker      Position `json:"marker"`
+		Direction   Position `json:"direction"`
+		ArcadeSize  float32  `json:"arcadeSize"`
+		SPGParamOne float32  `json:"spgParamOne"`
+		SPGParamTwo float32  `json:"spgParamTwo"`
+	}
+
+	// Camera records one full camera transform and view state.
+	Camera struct {
+		RotationX float32  `json:"rotationX"`
+		RotationY float32  `json:"rotationY"`
+		RotationZ float32  `json:"rotationZ"`
+		RotationW float32  `json:"rotationW"`
+		Position  Position `json:"position"`
+		FOV       float32  `json:"fov"`
+		Unknown   float32  `json:"unknown"`
+		Player    Position `json:"player"`
+		Direction Position `json:"direction"`
+	}
+
+	// PlayerNetStats records the client network state captured by the replay.
+	PlayerNetStats struct {
+		FPS       uint8  `json:"fps"`
+		Ping      uint16 `json:"ping"`
+		IsLagging bool   `json:"isLagging"`
+	}
+
 	// Event is one decoded replay event at a game clock value.
 	Event struct {
-		Clock      float32        `json:"clock"`
-		Type       Type           `json:"type"`
-		EntityID   uint32         `json:"entityID,omitempty"`
-		ParentID   uint32         `json:"parentID,omitempty"`
-		Controlled *bool          `json:"controlled,omitempty"`
-		Position   *Position      `json:"position,omitempty"`
-		Created    *EntityCreate  `json:"created,omitempty"`
-		Member     *EntityMember  `json:"member,omitempty"`
-		WeaponLock *WeaponLock    `json:"weaponLock,omitempty"`
-		Results    *BattleResults `json:"results,omitempty"`
+		Clock      float32         `json:"clock"`
+		Type       Type            `json:"type"`
+		EntityID   uint32          `json:"entityID,omitempty"`
+		ParentID   uint32          `json:"parentID,omitempty"`
+		Controlled *bool           `json:"controlled,omitempty"`
+		Position   *Position       `json:"position,omitempty"`
+		Created    *EntityCreate   `json:"created,omitempty"`
+		Member     *EntityMember   `json:"member,omitempty"`
+		WeaponLock *WeaponLock     `json:"weaponLock,omitempty"`
+		GunMarker  *GunMarker      `json:"gunMarker,omitempty"`
+		Camera     *Camera         `json:"camera,omitempty"`
+		NetStats   *PlayerNetStats `json:"netStats,omitempty"`
+		Results    *BattleResults  `json:"results,omitempty"`
 	}
 
 	// Timeline contains decoded events and packet types that do not yet have event decoders.
@@ -170,6 +210,15 @@ const (
 	// WeaponLockEvent identifies a weapon system target-lock change.
 	WeaponLockEvent Type = "weapon_lock"
 
+	// GunMarkerEvent identifies a player aiming marker update.
+	GunMarkerEvent Type = "gun_marker"
+
+	// CameraEvent identifies a full camera transform update.
+	CameraEvent Type = "camera"
+
+	// PlayerNetStatsEvent identifies a captured client network state.
+	PlayerNetStatsEvent Type = "player_net_stats"
+
 	// EntityControlEvent identifies a client entity-control change.
 	EntityControlEvent Type = "entity_control"
 
@@ -194,6 +243,20 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 		var event Event
 
 		switch packet.Type {
+		case gunMarkerPacketType:
+			if event, err = decodeGunMarker(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case playerNetStatsPacketType:
+			if event, err = decodePlayerNetStats(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
 		case entityLeavePacketType:
 			if event, err = decodeEntityLeave(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
@@ -267,6 +330,13 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 			timeline.Events = append(timeline.Events, event)
 		case nonVolatilePacketType:
 			if event, err = decodeNonVolatilePosition(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
+		case cameraPacketType:
+			if event, err = decodeCamera(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
 				return
 			}
@@ -436,6 +506,91 @@ func decodeWeaponLock(packet replayparser.Packet) (event Event, err error) {
 		},
 	}
 
+	return
+}
+
+// decodeGunMarker decodes a fixed player aiming-marker packet.
+func decodeGunMarker(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != gunMarkerPayloadSize {
+		err = fmt.Errorf("gun-marker packet has %d-byte payload, expected %d", len(packet.Payload), gunMarkerPayloadSize)
+		return
+	}
+
+	var payload []byte = packet.Payload
+	event = Event{
+		Clock: packet.Clock,
+		Type:  GunMarkerEvent,
+		GunMarker: &GunMarker{
+			Target:      positionAt(payload, 0),
+			Diameter:    float32At(payload, 12),
+			Marker:      positionAt(payload, 16),
+			Direction:   positionAt(payload, 28),
+			ArcadeSize:  float32At(payload, 40),
+			SPGParamOne: float32At(payload, 44),
+			SPGParamTwo: float32At(payload, 48),
+		},
+	}
+
+	return
+}
+
+// decodePlayerNetStats decodes the packed client FPS, ping, and lagging state.
+func decodePlayerNetStats(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != playerNetStatsPayloadSize {
+		err = fmt.Errorf("player-net-stats packet has %d-byte payload, expected %d", len(packet.Payload), playerNetStatsPayloadSize)
+		return
+	}
+
+	var packed uint32 = binary.LittleEndian.Uint32(packet.Payload)
+	event = Event{
+		Clock: packet.Clock,
+		Type:  PlayerNetStatsEvent,
+		NetStats: &PlayerNetStats{
+			FPS:       uint8(packed),
+			Ping:      uint16(packed >> 8),
+			IsLagging: packed&(1<<24) != 0,
+		},
+	}
+
+	return
+}
+
+// decodeCamera decodes a fixed full camera transform packet.
+func decodeCamera(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != cameraPayloadSize {
+		err = fmt.Errorf("camera packet has %d-byte payload, expected %d", len(packet.Payload), cameraPayloadSize)
+		return
+	}
+
+	var payload []byte = packet.Payload
+	event = Event{
+		Clock: packet.Clock,
+		Type:  CameraEvent,
+		Camera: &Camera{
+			RotationX: float32At(payload, 0),
+			RotationY: float32At(payload, 4),
+			RotationZ: float32At(payload, 8),
+			RotationW: float32At(payload, 12),
+			Position:  positionAt(payload, 16),
+			FOV:       float32At(payload, 28),
+			Unknown:   float32At(payload, 32),
+			Player:    positionAt(payload, 36),
+			Direction: positionAt(payload, 48),
+		},
+	}
+
+	return
+}
+
+// positionAt decodes one three-component position from a fixed little-endian payload.
+func positionAt(payload []byte, offset int) (position Position) {
+	position = Position{X: float32At(payload, offset), Y: float32At(payload, offset+4), Z: float32At(payload, offset+8)}
+	return
+}
+
+// float32At decodes one float32 from a fixed little-endian payload.
+func float32At(payload []byte, offset int) (number float32) {
+	number = math.Float32frombits(binary.LittleEndian.Uint32(payload[offset : offset+4]))
 	return
 }
 
