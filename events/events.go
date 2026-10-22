@@ -70,6 +70,7 @@ type (
 		MemberID    uint32 `json:"memberID"`
 		PayloadSize uint32 `json:"payloadSize"`
 		IsSlice     *bool  `json:"isSlice,omitempty"`
+		Payload     []byte `json:"payload,omitempty"`
 	}
 
 	// WeaponLock records the player's target lock state for one weapon type.
@@ -264,6 +265,7 @@ func decodeEntityMember(packet replayparser.Packet, eventType Type) (event Event
 		Member: &EntityMember{
 			MemberID:    binary.LittleEndian.Uint32(payload[4:8]),
 			PayloadSize: payloadSize,
+			Payload:     payload[entityMemberHeaderSize:],
 		},
 	}
 
@@ -298,6 +300,7 @@ func decodeNestedProperty(packet replayparser.Packet) (event Event, err error) {
 		Member: &EntityMember{
 			PayloadSize: payloadSize,
 			IsSlice:     &isSlice,
+			Payload:     payload[nestedPropertyHeaderSize:],
 		},
 	}
 
