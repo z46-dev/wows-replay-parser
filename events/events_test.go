@@ -41,6 +41,7 @@ func TestDecodeSupportedBuildFixtures(t *testing.T) {
 			assert.NotEmpty(t, positions)
 			assert.Len(t, results, 1)
 			assert.NotEmpty(t, results[0].Results.Raw)
+			assert.NotZero(t, timeline.OwnShipID)
 		})
 	}
 }

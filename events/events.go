@@ -12,6 +12,8 @@ import (
 
 const (
 	positionPacketType      uint32 = 10
+	entityControlPacketType uint32 = 2
+	ownedShipPacketType     uint32 = 32
 	battleResultsPacketType uint32 = 34
 	positionPayloadSize            = 45
 )
@@ -41,16 +43,18 @@ type (
 
 	// Event is one decoded replay event at a game clock value.
 	Event struct {
-		Clock    float32        `json:"clock"`
-		Type     Type           `json:"type"`
-		EntityID uint32         `json:"entityID,omitempty"`
-		Position *Position      `json:"position,omitempty"`
-		Results  *BattleResults `json:"results,omitempty"`
+		Clock      float32        `json:"clock"`
+		Type       Type           `json:"type"`
+		EntityID   uint32         `json:"entityID,omitempty"`
+		Controlled *bool          `json:"controlled,omitempty"`
+		Position   *Position      `json:"position,omitempty"`
+		Results    *BattleResults `json:"results,omitempty"`
 	}
 
 	// Timeline contains decoded events and packet types that do not yet have event decoders.
 	Timeline struct {
 		Events         []Event        `json:"events"`
+		OwnShipID      uint32         `json:"ownShipID,omitempty"`
 		UnknownPackets map[uint32]int `json:"unknownPackets,omitempty"`
 	}
 )
@@ -58,6 +62,12 @@ type (
 const (
 	// PositionEvent identifies entity movement updates.
 	PositionEvent Type = "position"
+
+	// EntityControlEvent identifies a client entity-control change.
+	EntityControlEvent Type = "entity_control"
+
+	// OwnShipEvent identifies the ship controlled by the replaying player.
+	OwnShipEvent Type = "own_ship"
 
 	// BattleResultsEvent identifies the replay's final results payload.
 	BattleResultsEvent Type = "battle_results"
@@ -74,12 +84,27 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 		var event Event
 
 		switch packet.Type {
+		case entityControlPacketType:
+			if event, err = decodeEntityControl(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
 		case positionPacketType:
 			if event, err = decodePosition(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
 				return
 			}
 
+			timeline.Events = append(timeline.Events, event)
+		case ownedShipPacketType:
+			if event, err = decodeOwnShip(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.OwnShipID = event.EntityID
 			timeline.Events = append(timeline.Events, event)
 		case battleResultsPacketType:
 			if event, err = decodeBattleResults(packet); err != nil {
@@ -110,6 +135,45 @@ func Filter(events []Event, eventType Type, entityID uint32) (filtered []Event) 
 		}
 
 		filtered = append(filtered, event)
+	}
+
+	return
+}
+
+// decodeEntityControl decodes the replay controller's entity ownership change.
+func decodeEntityControl(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != 5 {
+		err = fmt.Errorf("entity-control packet has %d-byte payload, expected 5", len(packet.Payload))
+		return
+	}
+
+	if packet.Payload[4] > 1 {
+		err = fmt.Errorf("entity-control packet has invalid control flag %d", packet.Payload[4])
+		return
+	}
+
+	var controlled bool = packet.Payload[4] == 1
+	event = Event{
+		Clock:      packet.Clock,
+		Type:       EntityControlEvent,
+		EntityID:   binary.LittleEndian.Uint32(packet.Payload[0:4]),
+		Controlled: &controlled,
+	}
+
+	return
+}
+
+// decodeOwnShip decodes the player ship entity identifier.
+func decodeOwnShip(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) != 4 {
+		err = fmt.Errorf("own-ship packet has %d-byte payload, expected 4", len(packet.Payload))
+		return
+	}
+
+	event = Event{
+		Clock:    packet.Clock,
+		Type:     OwnShipEvent,
+		EntityID: binary.LittleEndian.Uint32(packet.Payload),
 	}
 
 	return
