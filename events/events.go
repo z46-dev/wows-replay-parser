@@ -350,6 +350,9 @@ const (
 	// ShipDamageEvent identifies a verified negative vehicle health delta.
 	ShipDamageEvent Type = "ship_damage"
 
+	// ShipRepairEvent identifies a verified positive vehicle health delta.
+	ShipRepairEvent Type = "ship_repair"
+
 	// EntityControlEvent identifies a client entity-control change.
 	EntityControlEvent Type = "entity_control"
 
@@ -491,6 +494,9 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 				timeline.Events = append(timeline.Events, healthEvent)
 				if healthEvent.Health.Delta < 0 {
 					healthEvent.Type = ShipDamageEvent
+					timeline.Events = append(timeline.Events, healthEvent)
+				} else if healthEvent.Health.Delta > 0 {
+					healthEvent.Type = ShipRepairEvent
 					timeline.Events = append(timeline.Events, healthEvent)
 				}
 			}
