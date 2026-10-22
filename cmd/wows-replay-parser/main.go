@@ -8,7 +8,7 @@ import (
 
 	"github.com/alexflint/go-arg"
 	replayparser "github.com/z46-dev/wows-replay-parser"
-	"github.com/z46-dev/wows-replay-parser/events"
+	"github.com/z46-dev/wows-replay-parser/internal/events"
 )
 
 const maxReplayFileSize int64 = 256 << 20

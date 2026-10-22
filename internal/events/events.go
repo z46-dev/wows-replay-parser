@@ -642,6 +642,7 @@ func decodeBasePlayerCreate(packet replayparser.Packet, eventType Type) (event E
 		payload   []byte = packet.Payload
 		stateSize uint32 = binary.LittleEndian.Uint32(packet.Payload[6:10])
 	)
+
 	if uint64(stateSize) != uint64(len(payload)-basePlayerHeaderSize) {
 		err = fmt.Errorf("%s state length does not match packet", eventType)
 		return
@@ -672,6 +673,7 @@ func decodeCellPlayerCreate(packet replayparser.Packet) (event Event, err error)
 		payload   []byte = packet.Payload
 		stateSize uint32 = binary.LittleEndian.Uint32(payload[36:40])
 	)
+
 	if uint64(stateSize) != uint64(len(payload)-cellPlayerHeaderSize) {
 		err = fmt.Errorf("cell-player-create state length does not match packet")
 		return
@@ -727,8 +729,11 @@ func decodeEntityMember(packet replayparser.Packet, eventType Type) (event Event
 		return
 	}
 
-	var payload []byte = packet.Payload
-	var payloadSize uint32 = binary.LittleEndian.Uint32(payload[8:12])
+	var (
+		payload     []byte = packet.Payload
+		payloadSize uint32 = binary.LittleEndian.Uint32(payload[8:12])
+	)
+
 	if uint64(payloadSize) != uint64(len(payload)-entityMemberHeaderSize) {
 		err = fmt.Errorf("%s payload length does not match packet", eventType)
 		return
@@ -761,6 +766,7 @@ func decodeShipHealth(packet replayparser.Packet, entityID uint32, previous map[
 		hasPrior bool
 		health   *ShipHealth
 	)
+
 	if prior, hasPrior = previous[entityID]; hasPrior {
 		health = &ShipHealth{Current: current, Previous: prior, Delta: current - prior}
 	} else {
@@ -779,8 +785,11 @@ func decodeNestedProperty(packet replayparser.Packet) (event Event, err error) {
 		return
 	}
 
-	var payload []byte = packet.Payload
-	var flags byte = payload[4]
+	var (
+		payload []byte = packet.Payload
+		flags   byte   = payload[4]
+	)
+
 	if flags&0xfe != 0 {
 		err = fmt.Errorf("nested-property packet has invalid flags %d", flags)
 		return
@@ -1023,6 +1032,7 @@ func decodeMap(packet replayparser.Packet) (event Event, err error) {
 		nameSize uint32 = binary.LittleEndian.Uint32(payload[148:152])
 		offset   uint64 = mapPacketHeaderSize + uint64(nameSize)
 	)
+
 	if offset+mapPacketTrailerSize != uint64(len(payload)) {
 		err = fmt.Errorf("map name length does not match packet")
 		return
@@ -1099,6 +1109,7 @@ func decodeCruiseState(packet replayparser.Packet) (event Event, err error) {
 		Type:   CruiseStateEvent,
 		Cruise: &CruiseState{Key: binary.LittleEndian.Uint32(packet.Payload[0:4]), Value: int32(binary.LittleEndian.Uint32(packet.Payload[4:8]))},
 	}
+
 	return
 }
 
