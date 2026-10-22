@@ -41,6 +41,12 @@ The comparison used five 15.8.0 replays (catalog IDs `237008`, `236904`, `236902
 
 This supports sharing the container reader, decryptor, decompressor, and packet-frame walker for these two builds. It does **not** establish that every packet payload has the same schema or meaning. The packet-ID difference may be version-related or reflect which battles were sampled; more matched replays and decoded packet definitions are needed to decide.
 
+## Parser support
+
+The root Go package parses the container, decrypts and inflates the packet stream, and returns metadata plus raw packet frames (`type`, `clock`, and payload). The initial CLI at `cmd/wows-replay-parser` prints that metadata and counts raw packet IDs; it does not yet interpret packet payloads into gameplay events or render video. Build descriptors live in `internal/replayformat/v15_8.go` and `v15_9.go`; shared container and frame logic stays in the root package. Add a descriptor only after inspecting replays for that exact client build. Put actual wire-layout changes in shared decoding code selected by an explicit protocol layout/version rule, rather than copying the parser into each build file.
+
+The package currently accepts the exact observed builds `15.8.0.13187581` and `15.9.0.13357625`, each with three metadata blocks and the modern packet-ID layout. The modern layout assignment follows WoWs Toolkit's documented 12.6.0 transition; the 15.8/15.9 sample comparison itself verified framing, not payload schemas. Container and inflated packet data are capped at 256 MiB, and frame count is capped at four million. One replay from each build is checked in under `testdata/replays/` and exercised by `go test ./...`.
+
 ## How this comparison was made
 
 1. Read each file's magic, block count, and block lengths; parse the first block as JSON and record the client build.

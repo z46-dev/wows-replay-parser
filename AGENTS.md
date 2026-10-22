@@ -26,6 +26,7 @@ Mandatory coding guidelines for Go:
 11. For type declarations, if applicable, create them in a `type ( ... )` block
 12. When setting a value you're going to immediately check, do the assignment in the if statement
 13. Inline values used exactly once. Do not create one-use locals solely to name literals, filters, function arguments, or struct values; pass the expression directly where it is consumed. Keep a local only when the value is reused, must survive multi-step error handling, or must remain identical across multiple uses
+14. After a "thought" block, put a blank line before the next statement or block. Sure some things group well together, but a thought usually ends after a "}" or a return.
 
 Here's an example:
 
