@@ -12,12 +12,14 @@ import (
 
 const (
 	positionPacketType      uint32 = 10
+	entityCreatePacketType  uint32 = 5
 	entityControlPacketType uint32 = 2
 	ownedShipPacketType     uint32 = 32
 	playerOrientationType   uint32 = 44
 	battleResultsPacketType uint32 = 34
 	positionPayloadSize            = 45
 	orientationPayloadSize         = 32
+	entityCreateHeaderSize         = 42
 )
 
 type (
@@ -43,6 +45,16 @@ type (
 		Raw json.RawMessage `json:"raw"`
 	}
 
+	// EntityCreate records the fixed entity-creation envelope before its type-specific state.
+	EntityCreate struct {
+		EntityTypeID uint16    `json:"entityTypeID"`
+		SpaceID      uint32    `json:"spaceID"`
+		VehicleID    uint32    `json:"vehicleID"`
+		Position     *Position `json:"position"`
+		StateLength  uint32    `json:"stateLength"`
+		StateSize    uint32    `json:"stateSize"`
+	}
+
 	// Event is one decoded replay event at a game clock value.
 	Event struct {
 		Clock      float32        `json:"clock"`
@@ -51,6 +63,7 @@ type (
 		ParentID   uint32         `json:"parentID,omitempty"`
 		Controlled *bool          `json:"controlled,omitempty"`
 		Position   *Position      `json:"position,omitempty"`
+		Created    *EntityCreate  `json:"created,omitempty"`
 		Results    *BattleResults `json:"results,omitempty"`
 	}
 
@@ -65,6 +78,9 @@ type (
 const (
 	// PositionEvent identifies entity movement updates.
 	PositionEvent Type = "position"
+
+	// EntityCreateEvent identifies an entity's initial replay envelope.
+	EntityCreateEvent Type = "entity_create"
 
 	// EntityControlEvent identifies a client entity-control change.
 	EntityControlEvent Type = "entity_control"
@@ -90,6 +106,13 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 		var event Event
 
 		switch packet.Type {
+		case entityCreatePacketType:
+			if event, err = decodeEntityCreate(packet); err != nil {
+				err = fmt.Errorf("packet %d: %w", index, err)
+				return
+			}
+
+			timeline.Events = append(timeline.Events, event)
 		case entityControlPacketType:
 			if event, err = decodeEntityControl(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
@@ -129,6 +152,38 @@ func Decode(replay *replayparser.Replay) (timeline *Timeline, err error) {
 		default:
 			timeline.UnknownPackets[packet.Type]++
 		}
+	}
+
+	return
+}
+
+// decodeEntityCreate decodes the fixed portion of an entity creation packet.
+func decodeEntityCreate(packet replayparser.Packet) (event Event, err error) {
+	if len(packet.Payload) < entityCreateHeaderSize {
+		err = fmt.Errorf("entity-create packet has %d-byte payload, expected at least %d", len(packet.Payload), entityCreateHeaderSize)
+		return
+	}
+
+	var payload []byte = packet.Payload
+	event = Event{
+		Clock:    packet.Clock,
+		Type:     EntityCreateEvent,
+		EntityID: binary.LittleEndian.Uint32(payload[0:4]),
+		Created: &EntityCreate{
+			EntityTypeID: binary.LittleEndian.Uint16(payload[4:6]),
+			SpaceID:      binary.LittleEndian.Uint32(payload[6:10]),
+			VehicleID:    binary.LittleEndian.Uint32(payload[10:14]),
+			Position: &Position{
+				X:     math.Float32frombits(binary.LittleEndian.Uint32(payload[14:18])),
+				Y:     math.Float32frombits(binary.LittleEndian.Uint32(payload[18:22])),
+				Z:     math.Float32frombits(binary.LittleEndian.Uint32(payload[22:26])),
+				Yaw:   math.Float32frombits(binary.LittleEndian.Uint32(payload[26:30])),
+				Pitch: math.Float32frombits(binary.LittleEndian.Uint32(payload[30:34])),
+				Roll:  math.Float32frombits(binary.LittleEndian.Uint32(payload[34:38])),
+			},
+			StateLength: binary.LittleEndian.Uint32(payload[38:42]),
+			StateSize:   uint32(len(payload) - entityCreateHeaderSize),
+		},
 	}
 
 	return

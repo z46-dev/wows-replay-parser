@@ -37,10 +37,14 @@ func TestDecodeSupportedBuildFixtures(t *testing.T) {
 			}
 
 			var positions []Event = Filter(timeline.Events, PositionEvent, 0)
+			var entityCreates []Event = Filter(timeline.Events, EntityCreateEvent, 0)
 			var orientations []Event = Filter(timeline.Events, PlayerOrientationEvent, 0)
 			var ownShipOrientations []Event = Filter(timeline.Events, PlayerOrientationEvent, timeline.OwnShipID)
 			var results []Event = Filter(timeline.Events, BattleResultsEvent, 0)
 			assert.NotEmpty(t, positions)
+			assert.NotEmpty(t, entityCreates)
+			assert.NotNil(t, entityCreates[0].Created)
+			assert.NotZero(t, entityCreates[0].Created.EntityTypeID)
 			assert.NotEmpty(t, orientations)
 			assert.NotEmpty(t, ownShipOrientations)
 			assert.Len(t, results, 1)
