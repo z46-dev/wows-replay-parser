@@ -7,7 +7,7 @@ require (
 	github.com/gogpu/gg v0.52.5
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/crypto v0.58.0
-	golang.org/x/image v0.45.0
+	golang.org/x/image v0.47.0
 )
 
 require (
