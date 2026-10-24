@@ -140,18 +140,27 @@ func uintValue(value json.RawMessage) (number uint64) {
 
 // floatValue reads an optional JSON numeric value without treating malformed optional data as fatal.
 func floatValue(value json.RawMessage) (number float64) {
-	json.Unmarshal(value, &number)
+	if err := json.Unmarshal(value, &number); err != nil {
+		number = 0
+	}
+
 	return
 }
 
 // boolValue reads an optional JSON boolean value without treating malformed optional data as fatal.
 func boolValue(value json.RawMessage) (flag bool) {
-	json.Unmarshal(value, &flag)
+	if err := json.Unmarshal(value, &flag); err != nil {
+		flag = false
+	}
+
 	return
 }
 
 // stringValue reads an optional JSON string value without treating malformed optional data as fatal.
 func stringValue(value json.RawMessage) (text string) {
-	json.Unmarshal(value, &text)
+	if err := json.Unmarshal(value, &text); err != nil {
+		text = ""
+	}
+
 	return
 }

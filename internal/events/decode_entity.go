@@ -155,6 +155,23 @@ func decodeShipHealth(packet replayparser.Packet, entityID uint32, previous map[
 	return
 }
 
+// decodeSpottedEntities decodes a count followed by little-endian entity IDs.
+func decodeSpottedEntities(clock float32, entityID uint32, payload []byte) (event Event, err error) {
+	if len(payload) == 0 || len(payload) != 1+int(payload[0])*4 {
+		err = fmt.Errorf("spotted-entities payload has invalid count or length")
+		return
+	}
+
+	var spotted SpottedEntities = SpottedEntities{EntityIDs: make([]uint32, int(payload[0]))}
+	for index := range spotted.EntityIDs {
+		var offset int = 1 + index*4
+		spotted.EntityIDs[index] = binary.LittleEndian.Uint32(payload[offset : offset+4])
+	}
+
+	event = Event{Clock: clock, Type: ShipVisibilityEvent, EntityID: entityID, Visibility: &spotted}
+	return
+}
+
 // decodeNestedProperty decodes the stable nested-property envelope before its type-specific payload.
 func decodeNestedProperty(packet replayparser.Packet) (event Event, err error) {
 	if len(packet.Payload) < nestedPropertyHeaderSize {
@@ -219,6 +236,7 @@ func decodeEntityCreate(packet replayparser.Packet) (event Event, err error) {
 			},
 			StateLength: binary.LittleEndian.Uint32(payload[38:42]),
 			StateSize:   uint32(len(payload) - entityCreateHeaderSize),
+			State:       payload[entityCreateHeaderSize:],
 		},
 	}
 

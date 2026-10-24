@@ -132,23 +132,28 @@ type (
 
 	// EntityCreate records the fixed entity-creation envelope before its type-specific state.
 	EntityCreate struct {
-		EntityTypeID uint16    `json:"entityTypeID"`
-		EntityType   string    `json:"entityType,omitempty"`
-		SpaceID      uint32    `json:"spaceID"`
-		VehicleID    uint32    `json:"vehicleID"`
-		Position     *Position `json:"position"`
-		StateLength  uint32    `json:"stateLength"`
-		StateSize    uint32    `json:"stateSize"`
+		EntityTypeID         uint16         `json:"entityTypeID"`
+		EntityType           string         `json:"entityType,omitempty"`
+		SpaceID              uint32         `json:"spaceID"`
+		VehicleID            uint32         `json:"vehicleID"`
+		Position             *Position      `json:"position"`
+		StateLength          uint32         `json:"stateLength"`
+		StateSize            uint32         `json:"stateSize"`
+		State                []byte         `json:"state,omitempty"`
+		InitialProperties    map[string]any `json:"initialProperties,omitempty"`
+		InitialStateComplete bool           `json:"initialStateComplete,omitempty"`
 	}
 
 	// EntityBootstrap records the base or cell state supplied before an entity enters the world.
 	EntityBootstrap struct {
-		EntityTypeID uint16    `json:"entityTypeID,omitempty"`
-		SpaceID      uint32    `json:"spaceID,omitempty"`
-		VehicleID    uint32    `json:"vehicleID,omitempty"`
-		Position     *Position `json:"position,omitempty"`
-		StateSize    uint32    `json:"stateSize"`
-		State        []byte    `json:"state,omitempty"`
+		EntityTypeID         uint16         `json:"entityTypeID,omitempty"`
+		SpaceID              uint32         `json:"spaceID,omitempty"`
+		VehicleID            uint32         `json:"vehicleID,omitempty"`
+		Position             *Position      `json:"position,omitempty"`
+		StateSize            uint32         `json:"stateSize"`
+		State                []byte         `json:"state,omitempty"`
+		InitialProperties    map[string]any `json:"initialProperties,omitempty"`
+		InitialStateComplete bool           `json:"initialStateComplete,omitempty"`
 	}
 
 	// MapState records the map metadata and fixed map-transform data for the replay space.
@@ -231,27 +236,63 @@ type (
 		Delta    float32 `json:"delta"`
 	}
 
+	// SpottedEntities is the complete set of ships currently visible to the replay client.
+	SpottedEntities struct {
+		EntityIDs []uint32 `json:"entityIDs"`
+	}
+
+	// MinimapSquadron records a carrier aircraft marker and its minimap position.
+	MinimapSquadron struct {
+		PlaneID      int64   `json:"planeID"`
+		TeamID       int8    `json:"teamID,omitempty"`
+		GameParamsID uint32  `json:"gameParamsID,omitempty"`
+		X            float32 `json:"x"`
+		Z            float32 `json:"z"`
+		Removed      bool    `json:"removed,omitempty"`
+	}
+
+	// MinimapShipPosition records a quantized minimap sighting from updateMinimapVisionInfo.
+	MinimapShipPosition struct {
+		VehicleID    uint32  `json:"vehicleID"`
+		X            float32 `json:"x"`
+		Z            float32 `json:"z"`
+		Heading      float32 `json:"heading"`
+		IsSentinel   bool    `json:"isSentinel,omitempty"`
+		Disappearing bool    `json:"disappearing,omitempty"`
+	}
+
+	// TorpedoPosition records one server synchronization for an active torpedo.
+	TorpedoPosition struct {
+		OwnerID  uint32   `json:"ownerID"`
+		ShotID   uint16   `json:"shotID"`
+		Position Position `json:"position"`
+	}
+
 	// Event is one decoded replay event at a game clock value.
 	Event struct {
-		Clock      float32          `json:"clock"`
-		Type       Type             `json:"type"`
-		EntityID   uint32           `json:"entityID,omitempty"`
-		ParentID   uint32           `json:"parentID,omitempty"`
-		Controlled *bool            `json:"controlled,omitempty"`
-		Position   *Position        `json:"position,omitempty"`
-		Created    *EntityCreate    `json:"created,omitempty"`
-		Bootstrap  *EntityBootstrap `json:"bootstrap,omitempty"`
-		Member     *EntityMember    `json:"member,omitempty"`
-		Map        *MapState        `json:"map,omitempty"`
-		Payload    []byte           `json:"payload,omitempty"`
-		WeaponLock *WeaponLock      `json:"weaponLock,omitempty"`
-		GunMarker  *GunMarker       `json:"gunMarker,omitempty"`
-		Camera     *Camera          `json:"camera,omitempty"`
-		NetStats   *PlayerNetStats  `json:"netStats,omitempty"`
-		Scalar     *Scalar          `json:"scalar,omitempty"`
-		Cruise     *CruiseState     `json:"cruise,omitempty"`
-		Health     *ShipHealth      `json:"health,omitempty"`
-		Results    *BattleResults   `json:"results,omitempty"`
+		Clock      float32              `json:"clock"`
+		Type       Type                 `json:"type"`
+		EntityID   uint32               `json:"entityID,omitempty"`
+		ParentID   uint32               `json:"parentID,omitempty"`
+		Controlled *bool                `json:"controlled,omitempty"`
+		Position   *Position            `json:"position,omitempty"`
+		Created    *EntityCreate        `json:"created,omitempty"`
+		Bootstrap  *EntityBootstrap     `json:"bootstrap,omitempty"`
+		Member     *EntityMember        `json:"member,omitempty"`
+		Map        *MapState            `json:"map,omitempty"`
+		Payload    []byte               `json:"payload,omitempty"`
+		WeaponLock *WeaponLock          `json:"weaponLock,omitempty"`
+		GunMarker  *GunMarker           `json:"gunMarker,omitempty"`
+		Camera     *Camera              `json:"camera,omitempty"`
+		NetStats   *PlayerNetStats      `json:"netStats,omitempty"`
+		Scalar     *Scalar              `json:"scalar,omitempty"`
+		Cruise     *CruiseState         `json:"cruise,omitempty"`
+		Health     *ShipHealth          `json:"health,omitempty"`
+		Visibility *SpottedEntities     `json:"visibility,omitempty"`
+		Squadron   *MinimapSquadron     `json:"squadron,omitempty"`
+		Minimap    *MinimapShipPosition `json:"minimap,omitempty"`
+		Torpedo    *TorpedoPosition     `json:"torpedo,omitempty"`
+		Results    *BattleResults       `json:"results,omitempty"`
 	}
 
 	// Timeline contains decoded events and packet types that do not yet have event decoders.
@@ -352,6 +393,24 @@ const (
 
 	// ShipRepairEvent identifies a verified positive vehicle health delta.
 	ShipRepairEvent Type = "ship_repair"
+
+	// ShipVisibilityEvent identifies a complete update to the replay client's spotted ships.
+	ShipVisibilityEvent Type = "ship_visibility"
+
+	// MinimapSquadronEvent identifies an aircraft squadron entering the minimap.
+	MinimapSquadronEvent Type = "minimap_squadron"
+
+	// MinimapSquadronPositionEvent identifies a squadron minimap position update.
+	MinimapSquadronPositionEvent Type = "minimap_squadron_position"
+
+	// MinimapSquadronRemoveEvent identifies a squadron leaving the minimap.
+	MinimapSquadronRemoveEvent Type = "minimap_squadron_remove"
+
+	// MinimapShipPositionEvent identifies a ship's minimap-only position update.
+	MinimapShipPositionEvent Type = "minimap_ship_position"
+
+	// TorpedoPositionEvent identifies an authoritative torpedo position synchronization.
+	TorpedoPositionEvent Type = "torpedo_position"
 
 	// EntityControlEvent identifies a client entity-control change.
 	EntityControlEvent Type = "entity_control"

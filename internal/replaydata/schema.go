@@ -2,13 +2,16 @@ package replaydata
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -20,11 +23,14 @@ type (
 	}
 
 	Schema struct {
-		ClientVersion string
-		entities      map[uint16]string
-		properties    map[string][]string
-		methods       map[string][]string
-		vehicles      map[uint64]Vehicle
+		ClientVersion   string
+		entities        map[uint16]string
+		properties      map[string][]string
+		propertyTypes   map[string][]string
+		methods         map[string][]string
+		aliases         map[string]int
+		aliasPrimitives map[string]string
+		vehicles        map[uint64]Vehicle
 	}
 
 	xmlNode struct {
@@ -53,8 +59,14 @@ var primitiveSizes = map[string]int{
 
 // Load validates an extracted replay-data package and builds its wire-index tables.
 func Load(directory string, clientVersion string, allowVersionMixing bool) (schema *Schema, err error) {
+	var root *os.Root
+	if root, err = os.OpenRoot(directory); err != nil {
+		return
+	}
+	defer root.Close()
+
 	var data []byte
-	if data, err = os.ReadFile(filepath.Join(directory, "manifest.json")); err != nil {
+	if data, err = root.ReadFile("manifest.json"); err != nil {
 		return
 	}
 
@@ -75,8 +87,14 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 	}
 
 	for name, expectedHash := range manifest.Files {
+		var relativePath string = filepath.FromSlash(name)
+		if !filepath.IsLocal(relativePath) || relativePath == "." {
+			err = fmt.Errorf("schema file path %q is not package-relative", name)
+			return
+		}
+
 		var fileData []byte
-		if fileData, err = os.ReadFile(filepath.Join(directory, filepath.FromSlash(name))); err != nil {
+		if fileData, err = root.ReadFile(relativePath); err != nil {
 			err = fmt.Errorf("read schema file %s: %w", name, err)
 			return
 		}
@@ -95,29 +113,34 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 	var (
 		entitiesXML xmlNode
 		aliasesXML  xmlNode
-		aliases     map[string]int = make(map[string]int)
-		defsPath    string         = filepath.Join(directory, "entity_defs")
+		defsPath    string = "entity_defs"
 	)
 
-	if err = readXML(filepath.Join(directory, "entities.xml"), &entitiesXML); err != nil {
+	if err = readXML(root, "entities.xml", &entitiesXML); err != nil {
 		return
 	}
 
-	if err = readXML(filepath.Join(defsPath, "alias.xml"), &aliasesXML); err != nil {
+	if err = readXML(root, filepath.Join(defsPath, "alias.xml"), &aliasesXML); err != nil {
 		return
 	}
 
-	for _, alias := range aliasesXML.Children {
-		if len(alias.Children) == 0 {
-			continue
-		}
+	var (
+		aliases         map[string]int    = aliasSizes(aliasesXML.Children)
+		aliasPrimitives map[string]string = primitiveAliases(aliasesXML.Children)
+	)
 
-		aliases[alias.XMLName.Local] = typeSize(aliasType(alias.Children[0]), aliases)
+	schema = &Schema{
+		ClientVersion:   manifest.ClientVersion,
+		entities:        make(map[uint16]string),
+		properties:      make(map[string][]string),
+		propertyTypes:   make(map[string][]string),
+		methods:         make(map[string][]string),
+		aliases:         aliases,
+		aliasPrimitives: aliasPrimitives,
 	}
 
-	schema = &Schema{ClientVersion: manifest.ClientVersion, entities: make(map[uint16]string), properties: make(map[string][]string), methods: make(map[string][]string)}
 	schema.vehicles = make(map[uint64]Vehicle)
-	if vehicleData, readErr := os.ReadFile(filepath.Join(directory, "vehicles.json")); readErr == nil {
+	if vehicleData, readErr := root.ReadFile("vehicles.json"); readErr == nil {
 		var vehicles []Vehicle
 		if err = json.Unmarshal(vehicleData, &vehicles); err != nil {
 			err = fmt.Errorf("decode vehicle catalog: %w", err)
@@ -145,7 +168,7 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 		schema.entities[uint16(index+1)] = name
 
 		var entity xmlNode
-		if err = readXML(filepath.Join(defsPath, name+".def"), &entity); err != nil {
+		if err = readXML(root, filepath.Join(defsPath, name+".def"), &entity); err != nil {
 			return
 		}
 
@@ -154,7 +177,7 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 			allMethods    []method
 		)
 
-		if err = schema.readEntity(defsPath, entity, make(map[string]bool), &allProperties, &allMethods, aliases); err != nil {
+		if err = schema.readEntity(root, defsPath, entity, make(map[string]bool), &allProperties, &allMethods, aliases); err != nil {
 			return
 		}
 
@@ -166,6 +189,7 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 		for _, item := range allProperties {
 			if clientVisible(item.Flag) && !seenProperties[item.Name] {
 				schema.properties[name] = append(schema.properties[name], item.Name)
+				schema.propertyTypes[name] = append(schema.propertyTypes[name], item.Type)
 				seenProperties[item.Name] = true
 			}
 		}
@@ -187,7 +211,7 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 }
 
 // readEntity applies the depth-first interface order used by BigWorld definitions.
-func (schema *Schema) readEntity(defsPath string, node xmlNode, visited map[string]bool, properties *[]property, methods *[]method, aliases map[string]int) (err error) {
+func (schema *Schema) readEntity(root *os.Root, defsPath string, node xmlNode, visited map[string]bool, properties *[]property, methods *[]method, aliases map[string]int) (err error) {
 	for _, child := range node.Children {
 		if child.XMLName.Local != "Implements" {
 			continue
@@ -202,11 +226,11 @@ func (schema *Schema) readEntity(defsPath string, node xmlNode, visited map[stri
 			visited[name] = true
 
 			var interfaceNode xmlNode
-			if err = readXML(filepath.Join(defsPath, "interfaces", name+".def"), &interfaceNode); err != nil {
+			if err = readXML(root, filepath.Join(defsPath, "interfaces", name+".def"), &interfaceNode); err != nil {
 				return
 			}
 
-			if err = schema.readEntity(defsPath, interfaceNode, visited, properties, methods, aliases); err != nil {
+			if err = schema.readEntity(root, defsPath, interfaceNode, visited, properties, methods, aliases); err != nil {
 				return
 			}
 		}
@@ -230,25 +254,34 @@ func (schema *Schema) readEntity(defsPath string, node xmlNode, visited map[stri
 			}
 		case "ClientMethods":
 			for _, entry := range section.Children {
-				var item method = method{Name: entry.XMLName.Local, Size: 0}
+				var (
+					item         method = method{Name: entry.XMLName.Local}
+					argumentSize int
+					headerSize   int = 1
+				)
+
 				for _, field := range entry.Children {
 					if field.XMLName.Local == "Arg" {
-						item.Size += typeSize(aliasType(field), aliases)
+						argumentSize += typeSize(aliasType(field), aliases)
 					}
 
 					if field.XMLName.Local == "Args" {
 						for _, argument := range field.Children {
-							item.Size += typeSize(aliasType(argument), aliases)
+							argumentSize += typeSize(aliasType(argument), aliases)
 						}
 					}
 
 					if field.XMLName.Local == "VariableLengthHeaderSize" {
-						var header int
-						fmt.Sscan(strings.TrimSpace(field.Text), &header)
-						item.Size = 65535 + header
+						for _, detail := range field.Children {
+							if parsedHeader, scanErr := strconv.Atoi(strings.TrimSpace(detail.Text)); scanErr == nil {
+								headerSize = parsedHeader
+								break
+							}
+						}
 					}
 				}
 
+				item.Size = exposedMethodSortSize(argumentSize, headerSize)
 				*methods = append(*methods, item)
 			}
 		}
@@ -282,6 +315,116 @@ func (schema *Schema) MethodName(entityTypeID uint16, memberID uint32) string {
 	return schema.methods[entityName][memberID]
 }
 
+// DecodeInitialState reads primitive inline properties before any unsupported variable-length values.
+func (schema *Schema) DecodeInitialState(entityTypeID uint16, data []byte) (properties map[string]any, complete bool) {
+	if len(data) == 0 {
+		return
+	}
+
+	var (
+		entityName    string   = schema.EntityName(entityTypeID)
+		propertyNames []string = schema.properties[entityName]
+		propertyTypes []string = schema.propertyTypes[entityName]
+		propertyCount int      = int(data[0])
+		offset        int      = 1
+	)
+
+	properties = make(map[string]any)
+	for range propertyCount {
+		if offset >= len(data) {
+			return
+		}
+
+		var propertyID int = int(data[offset])
+		offset++
+		if propertyID >= len(propertyNames) || propertyID >= len(propertyTypes) {
+			return
+		}
+
+		var (
+			propertyName string = propertyNames[propertyID]
+			typeName     string = strings.ToUpper(strings.TrimSpace(propertyTypes[propertyID]))
+			primitive    string = typeName
+		)
+
+		if aliasType, ok := schema.aliasPrimitives[typeName]; ok {
+			primitive = aliasType
+		}
+
+		var (
+			value     any
+			valueSize int
+			decoded   bool
+		)
+
+		if value, valueSize, decoded = decodeInlinePrimitive(typeName, primitive, data[offset:]); decoded {
+			properties[propertyName] = value
+			offset += valueSize
+			continue
+		}
+
+		valueSize = typeSize(typeName, schema.aliases)
+		if valueSize >= 65535 || valueSize > len(data)-offset {
+			return
+		}
+
+		offset += valueSize
+	}
+
+	complete = offset == len(data)
+	return
+}
+
+// decodeInlinePrimitive decodes fixed-width scalar values from an EntityCreate state stream.
+func decodeInlinePrimitive(typeName string, primitive string, data []byte) (value any, size int, ok bool) {
+	if typeName == "BOOL" {
+		if len(data) >= 1 {
+			value = data[0] != 0
+			size = 1
+			ok = true
+		}
+
+		return
+	}
+
+	size = primitiveSizes[primitive]
+	if size == 0 || len(data) < size {
+		return
+	}
+
+	switch primitive {
+	case "INT8":
+		value = int8(data[0])
+	case "UINT8":
+		value = data[0]
+	case "INT16":
+		value = int16(binary.LittleEndian.Uint16(data))
+	case "UINT16":
+		value = binary.LittleEndian.Uint16(data)
+	case "INT32":
+		value = int32(binary.LittleEndian.Uint32(data))
+	case "UINT32":
+		value = binary.LittleEndian.Uint32(data)
+	case "FLOAT", "FLOAT32":
+		value = math.Float32frombits(binary.LittleEndian.Uint32(data))
+	case "INT64":
+		value = int64(binary.LittleEndian.Uint64(data))
+	case "UINT64":
+		value = binary.LittleEndian.Uint64(data)
+	case "FLOAT64":
+		value = math.Float64frombits(binary.LittleEndian.Uint64(data))
+	case "VECTOR2":
+		value = [2]float32{math.Float32frombits(binary.LittleEndian.Uint32(data)), math.Float32frombits(binary.LittleEndian.Uint32(data[4:]))}
+	case "VECTOR3":
+		value = [3]float32{math.Float32frombits(binary.LittleEndian.Uint32(data)), math.Float32frombits(binary.LittleEndian.Uint32(data[4:])), math.Float32frombits(binary.LittleEndian.Uint32(data[8:]))}
+	default:
+		return nil, 0, false
+	}
+
+	ok = true
+	return
+}
+
 // Vehicle returns the ship catalog entry for a GameParams vehicle ID.
 func (schema *Schema) Vehicle(vehicleTypeID uint64) (vehicle Vehicle, ok bool) {
 	vehicle, ok = schema.vehicles[vehicleTypeID]
@@ -289,9 +432,9 @@ func (schema *Schema) Vehicle(vehicleTypeID uint64) (vehicle Vehicle, ok bool) {
 }
 
 // readXML loads one XML schema file.
-func readXML(path string, node *xmlNode) (err error) {
+func readXML(root *os.Root, path string, node *xmlNode) (err error) {
 	var data []byte
-	if data, err = os.ReadFile(path); err != nil {
+	if data, err = root.ReadFile(path); err != nil {
 		return
 	}
 
@@ -325,6 +468,188 @@ func typeSize(name string, aliases map[string]int) int {
 	}
 
 	return 65535
+}
+
+// exposedMethodSortSize matches BigWorld's capped argument-size ordering and header offset.
+func exposedMethodSortSize(argumentSize int, headerSize int) (size int) {
+	if argumentSize >= 65535 {
+		size = 65535 + headerSize
+	} else {
+		size = argumentSize + headerSize
+	}
+
+	return
+}
+
+// aliasSizes resolves primitive aliases and fixed dictionaries for schema ordering.
+func aliasSizes(definitions []xmlNode) (sizes map[string]int) {
+	var nodes map[string]xmlNode = make(map[string]xmlNode, len(definitions))
+	for _, definition := range definitions {
+		nodes[definition.XMLName.Local] = definition
+	}
+
+	sizes = make(map[string]int, len(nodes))
+	var (
+		resolving map[string]bool = make(map[string]bool)
+		resolve   func(string) int
+	)
+
+	resolve = func(name string) (size int) {
+		if cached, ok := sizes[name]; ok {
+			size = cached
+			return
+		}
+
+		if resolving[name] {
+			return 65535
+		}
+
+		definition, ok := nodes[name]
+		if !ok {
+			return typeSize(name, sizes)
+		}
+
+		resolving[name] = true
+		var base string = strings.ToUpper(strings.TrimSpace(definition.Text))
+		if size, ok = primitiveSizes[base]; ok {
+			delete(resolving, name)
+			sizes[name] = size
+			return
+		}
+
+		switch {
+		case strings.Contains(base, "ARRAY") || strings.Contains(base, "STRING") || strings.Contains(base, "BLOB"):
+			size = 65535
+		case base == "USER_TYPE":
+			// BigWorld sorts exposed methods with USER_TYPE arguments as
+			// variable-sized even when the wrapped primitive has a fixed wire size.
+			size = 65535
+		case base == "FIXED_DICT" || base == "TUPLE":
+			for _, child := range definition.Children {
+				if child.XMLName.Local == "AllowNone" && strings.EqualFold(strings.TrimSpace(child.Text), "true") {
+					size = 65535
+					break
+				}
+
+				if child.XMLName.Local != "Properties" && child.XMLName.Local != "Types" {
+					continue
+				}
+
+				for _, field := range child.Children {
+					for _, detail := range field.Children {
+						if detail.XMLName.Local == "AllowNone" && strings.EqualFold(strings.TrimSpace(detail.Text), "true") {
+							size = 65535
+							break
+						}
+					}
+
+					if size >= 65535 {
+						break
+					}
+
+					var fieldType string
+					for _, detail := range field.Children {
+						if detail.XMLName.Local == "Type" {
+							fieldType = strings.TrimSpace(detail.Text)
+							break
+						}
+					}
+
+					if fieldType == "" {
+						fieldType = strings.TrimSpace(field.Text)
+					}
+
+					fieldSize := resolve(fieldType)
+					if fieldSize >= 65535 {
+						size = 65535
+						break
+					}
+
+					size += fieldSize
+				}
+			}
+
+			if size == 0 {
+				size = 65535
+			}
+		default:
+			size = resolve(base)
+		}
+
+		delete(resolving, name)
+		sizes[name] = size
+		return
+	}
+
+	for name := range nodes {
+		resolve(name)
+	}
+
+	return
+}
+
+// primitiveAliases resolves aliases whose wire values remain fixed-width scalars.
+func primitiveAliases(definitions []xmlNode) (types map[string]string) {
+	var nodes map[string]xmlNode = make(map[string]xmlNode, len(definitions))
+	for _, definition := range definitions {
+		nodes[definition.XMLName.Local] = definition
+	}
+
+	types = make(map[string]string, len(nodes))
+
+	var (
+		resolving map[string]bool = make(map[string]bool)
+		resolve   func(string) string
+	)
+
+	resolve = func(name string) (primitive string) {
+		if cached, ok := types[name]; ok {
+			primitive = cached
+			return
+		}
+
+		if _, ok := primitiveSizes[name]; ok {
+			primitive = name
+			return
+		}
+
+		if resolving[name] {
+			return
+		}
+
+		definition, ok := nodes[name]
+		if !ok {
+			return
+		}
+
+		resolving[name] = true
+		var base string = strings.ToUpper(strings.TrimSpace(definition.Text))
+		if _, ok := primitiveSizes[base]; ok {
+			primitive = base
+		} else if base == "USER_TYPE" {
+			for _, child := range definition.Children {
+				if child.XMLName.Local == "Type" {
+					primitive = resolve(strings.ToUpper(strings.TrimSpace(child.Text)))
+					break
+				}
+			}
+		} else if _, ok := nodes[base]; ok {
+			primitive = resolve(base)
+		}
+
+		delete(resolving, name)
+		if primitive != "" {
+			types[name] = primitive
+		}
+
+		return
+	}
+
+	for name := range nodes {
+		resolve(name)
+	}
+
+	return
 }
 
 // aliasType flattens a definition type node to the primitive or alias name it contains.

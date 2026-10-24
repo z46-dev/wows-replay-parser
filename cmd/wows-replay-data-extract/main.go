@@ -47,13 +47,16 @@ func main() {
 // extract copies only entity schemas required to interpret replay entity packets.
 func extract(args arguments) (err error) {
 	var (
-		scriptsPath      string = filepath.Join(args.InstallPath, "res_unpack", "scripts")
-		gameParamsPath   string = filepath.Join(args.InstallPath, "res_unpack", "content", "GameParams.data")
-		buildNumber      string = strings.TrimPrefix(args.Version[strings.LastIndex(args.Version, ".")+1:], ".")
-		localizationPath string = filepath.Join(args.InstallPath, "bin", buildNumber, "res", "texts", "en", "LC_MESSAGES", "global.mo")
-		outputPath       string = args.OutputPath
-		wowsUnpackPath   string = args.WowsUnpack
-		stagingPath      string
+		scriptsPath       string = filepath.Join(args.InstallPath, "res_unpack", "scripts")
+		gameParamsPath    string = filepath.Join(args.InstallPath, "res_unpack", "content", "GameParams.data")
+		silhouettesPath   string = filepath.Join(args.InstallPath, "res_unpack", "gui", "ships_silhouettes")
+		classIconsPath    string = filepath.Join(args.InstallPath, "res_unpack", "gui", "fla", "minimap", "ship_icons")
+		squadronIconsPath string = filepath.Join(args.InstallPath, "res_unpack", "gui", "grand_strategy_pass", "pawns")
+		buildNumber       string = strings.TrimPrefix(args.Version[strings.LastIndex(args.Version, ".")+1:], ".")
+		localizationPath  string = filepath.Join(args.InstallPath, "bin", buildNumber, "res", "texts", "en", "LC_MESSAGES", "global.mo")
+		outputPath        string = args.OutputPath
+		wowsUnpackPath    string = args.WowsUnpack
+		stagingPath       string
 	)
 
 	if outputPath == "" {
@@ -77,6 +80,16 @@ func extract(args arguments) (err error) {
 
 	if _, err = os.Stat(gameParamsPath); err != nil {
 		err = fmt.Errorf("install does not contain res_unpack/content/GameParams.data: %w", err)
+		return
+	}
+
+	if _, err = os.Stat(silhouettesPath); err != nil {
+		err = fmt.Errorf("install does not contain unpacked ship silhouettes: %w", err)
+		return
+	}
+
+	if _, err = os.Stat(squadronIconsPath); err != nil {
+		err = fmt.Errorf("install does not contain the unpacked aircraft silhouette: %w", err)
 		return
 	}
 
@@ -142,19 +155,19 @@ func extract(args arguments) (err error) {
 
 	var (
 		gameParamsJSONPath           string    = filepath.Join(stagingPath, "GameParams.json")
-		command                      *exec.Cmd = exec.Command(wowsUnpackPath, "game-params", "--input", gameParamsPath, "--id", "NA", "--ugly", gameParamsJSONPath)
+		command                      *exec.Cmd = exec.Command(wowsUnpackPath, "game-params", "--input", gameParamsPath, "--id", "NA", "--ugly", gameParamsJSONPath) // #nosec G204 -- executable is user-selected; fixed args are passed without a shell.
 		commandOutput                []byte
 		paramsFile, localizationFile *os.File
 		localizedNames               map[string]string
 		vehicles                     []replaydata.Vehicle
 	)
 
-	if localizationFile, err = os.Open(localizationPath); err != nil {
+	if localizationFile, err = os.Open(localizationPath); err != nil { // #nosec G304 -- validated version path under the selected install.
 		return
 	}
 
 	if localizedNames, err = replaydata.ParseMO(localizationFile); err != nil {
-		localizationFile.Close()
+		localizationFile.Close() // #nosec G104 -- parse error is authoritative; close is cleanup only.
 		err = fmt.Errorf("parse English ship-name catalog: %w", err)
 		return
 	}
@@ -168,7 +181,7 @@ func extract(args arguments) (err error) {
 		return
 	}
 
-	if paramsFile, err = os.Open(gameParamsJSONPath); err != nil {
+	if paramsFile, err = os.Open(gameParamsJSONPath); err != nil { // #nosec G304 -- generated path is inside the staging directory.
 		return
 	}
 
@@ -199,6 +212,17 @@ func extract(args arguments) (err error) {
 
 	var vehicleHash [32]byte = sha256.Sum256(vehicleData)
 	files["vehicles.json"] = hex.EncodeToString(vehicleHash[:])
+	if err = copyShipSilhouettes(silhouettesPath, stagingPath, vehicles, files); err != nil {
+		return
+	}
+
+	if err = copyShipClassIcons(classIconsPath, stagingPath, files); err != nil {
+		return
+	}
+
+	if err = copySquadronIcons(squadronIconsPath, stagingPath, files); err != nil {
+		return
+	}
 
 	var (
 		packageManifest manifest = manifest{FormatVersion: 1, ClientVersion: args.Version, Files: files}
@@ -227,10 +251,76 @@ func extract(args arguments) (err error) {
 	return
 }
 
+// copyShipClassIcons packages the unified minimap marker and its visibility/death variants for each ship class.
+func copyShipClassIcons(sourceDirectory string, packageDirectory string, files map[string]string) (err error) {
+	for _, species := range []string{"aircarrier", "battleship", "cruiser", "destroyer", "submarine"} {
+		for _, state := range []string{"", "_dead", "_last_visible"} {
+			var (
+				name        string = "minimap_" + species + state + ".svg"
+				packagePath string = filepath.Join("ships_classes", species+state+".svg")
+			)
+
+			if err = copyFile(filepath.Join(sourceDirectory, name), filepath.Join(packageDirectory, packagePath), packagePath, files); err != nil {
+				return
+			}
+		}
+	}
+
+	return
+}
+
+// copyShipSilhouettes copies only icons referenced by the extracted ship catalog.
+func copyShipSilhouettes(sourceDirectory string, packageDirectory string, vehicles []replaydata.Vehicle, files map[string]string) (err error) {
+	var copied map[string]bool = make(map[string]bool)
+	for _, vehicle := range vehicles {
+		if vehicle.ShipID == "" || filepath.Base(vehicle.ShipID) != vehicle.ShipID || copied[vehicle.ShipID] {
+			continue
+		}
+
+		copied[vehicle.ShipID] = true
+		var (
+			name        string = vehicle.ShipID + ".png"
+			sourcePath  string = filepath.Join(sourceDirectory, name)
+			packagePath string = filepath.Join("ships_silhouettes", name)
+		)
+
+		if _, err = os.Stat(sourcePath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				err = nil
+				continue
+			}
+
+			return
+		}
+
+		if err = copyFile(sourcePath, filepath.Join(packageDirectory, packagePath), packagePath, files); err != nil {
+			return
+		}
+	}
+
+	return
+}
+
+// copySquadronIcons packages the game's ally and enemy minimap aircraft markers.
+func copySquadronIcons(sourceDirectory string, packageDirectory string, files map[string]string) (err error) {
+	for _, icon := range []struct {
+		Source string
+		Target string
+	}{
+		{Source: "aircraft.png", Target: "squadrons/aircraft.png"},
+	} {
+		if err = copyFile(filepath.Join(sourceDirectory, icon.Source), filepath.Join(packageDirectory, filepath.FromSlash(icon.Target)), icon.Target, files); err != nil {
+			return
+		}
+	}
+
+	return
+}
+
 // copyFile copies one schema file and records its SHA-256 in the package manifest.
 func copyFile(source, destination, packagePath string, files map[string]string) (err error) {
 	var input *os.File
-	if input, err = os.Open(source); err != nil {
+	if input, err = os.Open(source); err != nil { // #nosec G304 -- source is from the selected install's WalkDir.
 		return
 	}
 
@@ -241,7 +331,7 @@ func copyFile(source, destination, packagePath string, files map[string]string) 
 	}
 
 	var output *os.File
-	if output, err = os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644); err != nil {
+	if output, err = os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644); err != nil { // #nosec G304 -- destination is a package-relative path under staging.
 		return
 	}
 

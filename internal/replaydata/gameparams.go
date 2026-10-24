@@ -9,21 +9,25 @@ import (
 )
 
 // Vehicle identifies a ship in the version-specific GameParams catalog.
-type Vehicle struct {
-	ID       uint64 `json:"id"`
-	ShipID   string `json:"shipID"`
-	ShipName string `json:"shipName"`
-}
+type (
+	Vehicle struct {
+		ID       uint64 `json:"id"`
+		ShipID   string `json:"shipID"`
+		ShipName string `json:"shipName"`
+		Species  string `json:"species"`
+	}
 
-type gameParamVehicle struct {
-	ID    json.RawMessage `json:"id"`
-	Index string          `json:"index"`
-	Name  string          `json:"name"`
-}
+	gameParamVehicle struct {
+		ID      json.RawMessage `json:"id"`
+		Index   string          `json:"index"`
+		Name    string          `json:"name"`
+		Species string          `json:"species"`
+	}
 
-type gameParamTypeInfo struct {
-	TypeInfo json.RawMessage `json:"typeinfo"`
-}
+	gameParamTypeInfo struct {
+		TypeInfo json.RawMessage `json:"typeinfo"`
+	}
+)
 
 // ParseVehicles streams GameParams JSON and extracts only ship identifiers and names.
 func ParseVehicles(reader io.Reader, localizedNames map[string]string) (vehicles []Vehicle, err error) {
@@ -97,7 +101,7 @@ func ParseVehicles(reader io.Reader, localizedNames map[string]string) (vehicles
 			}
 		}
 
-		vehicles = append(vehicles, Vehicle{ID: vehicleID, ShipID: item.Index, ShipName: shipName})
+		vehicles = append(vehicles, Vehicle{ID: vehicleID, ShipID: item.Index, ShipName: shipName, Species: item.Species})
 		seenIDs[vehicleID] = true
 	}
 

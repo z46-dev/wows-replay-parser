@@ -2,7 +2,8 @@ package events
 
 import (
 	"fmt"
-	"github.com/z46-dev/wows-replay-parser"
+
+	replayparser "github.com/z46-dev/wows-replay-parser"
 	"github.com/z46-dev/wows-replay-parser/internal/replaydata"
 )
 
@@ -34,6 +35,10 @@ func DecodeWithSchema(replay *replayparser.Replay, schema *replaydata.Schema) (t
 			}
 
 			entityTypes[event.EntityID] = event.Bootstrap.EntityTypeID
+			if schema != nil {
+				event.Bootstrap.InitialProperties, event.Bootstrap.InitialStateComplete = schema.DecodeInitialState(event.Bootstrap.EntityTypeID, event.Bootstrap.State)
+			}
+
 			timeline.Events = append(timeline.Events, event)
 		case basePlayerCreateStubType:
 			if event, err = decodeBasePlayerCreate(packet, BasePlayerCreateStubEvent); err != nil {
@@ -42,11 +47,22 @@ func DecodeWithSchema(replay *replayparser.Replay, schema *replaydata.Schema) (t
 			}
 
 			entityTypes[event.EntityID] = event.Bootstrap.EntityTypeID
+			if schema != nil {
+				event.Bootstrap.InitialProperties, event.Bootstrap.InitialStateComplete = schema.DecodeInitialState(event.Bootstrap.EntityTypeID, event.Bootstrap.State)
+			}
+
 			timeline.Events = append(timeline.Events, event)
 		case cellPlayerCreatePacketType:
 			if event, err = decodeCellPlayerCreate(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
 				return
+			}
+
+			if entityTypeID, exists := entityTypes[event.EntityID]; exists {
+				event.Bootstrap.EntityTypeID = entityTypeID
+				if schema != nil {
+					event.Bootstrap.InitialProperties, event.Bootstrap.InitialStateComplete = schema.DecodeInitialState(entityTypeID, event.Bootstrap.State)
+				}
 			}
 
 			timeline.Events = append(timeline.Events, event)
@@ -122,6 +138,7 @@ func DecodeWithSchema(replay *replayparser.Replay, schema *replaydata.Schema) (t
 			entityTypes[event.EntityID] = event.Created.EntityTypeID
 			if schema != nil {
 				event.Created.EntityType = schema.EntityName(event.Created.EntityTypeID)
+				event.Created.InitialProperties, event.Created.InitialStateComplete = schema.DecodeInitialState(event.Created.EntityTypeID, event.Created.State)
 			}
 
 			timeline.Events = append(timeline.Events, event)
@@ -154,6 +171,16 @@ func DecodeWithSchema(replay *replayparser.Replay, schema *replaydata.Schema) (t
 					timeline.Events = append(timeline.Events, healthEvent)
 				}
 			}
+
+			if event.Member.Name == "spottedEntities" {
+				var visibilityEvent Event
+				if visibilityEvent, err = decodeSpottedEntities(event.Clock, event.EntityID, event.Member.Payload); err != nil {
+					err = fmt.Errorf("packet %d: %w", index, err)
+					return
+				}
+
+				timeline.Events = append(timeline.Events, visibilityEvent)
+			}
 		case entityMethodPacketType:
 			if event, err = decodeEntityMember(packet, EntityMethodEvent); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
@@ -164,6 +191,34 @@ func DecodeWithSchema(replay *replayparser.Replay, schema *replaydata.Schema) (t
 				var entityTypeID uint16 = entityTypes[event.EntityID]
 				event.Member.EntityType = schema.EntityName(entityTypeID)
 				event.Member.Name = schema.MethodName(entityTypeID, event.Member.MemberID)
+
+				var (
+					squadronEvent Event
+					recognized    bool
+				)
+
+				if squadronEvent, recognized, err = decodeMinimapSquadron(event.Clock, event.EntityID, *event.Member); err != nil {
+					err = fmt.Errorf("packet %d: %w", index, err)
+					return
+				} else if recognized {
+					timeline.Events = append(timeline.Events, squadronEvent)
+				}
+
+				var torpedoEvent Event
+				if torpedoEvent, recognized, err = decodeTorpedoPosition(event.Clock, *event.Member); err != nil {
+					err = fmt.Errorf("packet %d: %w", index, err)
+					return
+				} else if recognized {
+					timeline.Events = append(timeline.Events, torpedoEvent)
+				}
+
+				var minimapEvents []Event
+				if minimapEvents, recognized, err = decodeMinimapVisionInfo(event.Clock, event.EntityID, *event.Member); err != nil {
+					err = fmt.Errorf("packet %d: %w", index, err)
+					return
+				} else if recognized {
+					timeline.Events = append(timeline.Events, minimapEvents...)
+				}
 			}
 
 			timeline.Events = append(timeline.Events, event)

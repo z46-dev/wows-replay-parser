@@ -69,6 +69,8 @@ func TestDecodeSupportedBuildFixtures(t *testing.T) {
 			assert.NotEmpty(t, entityCreates)
 			assert.NotNil(t, entityCreates[0].Created)
 			assert.NotZero(t, entityCreates[0].Created.EntityTypeID)
+			assert.NotEmpty(t, entityCreates[0].Created.State)
+			assert.Len(t, entityCreates[0].Created.State, int(entityCreates[0].Created.StateSize))
 			assert.NotEmpty(t, entityProperties)
 			assert.NotNil(t, entityProperties[0].Member)
 			assert.Len(t, entityProperties[0].Member.Payload, int(entityProperties[0].Member.PayloadSize))
