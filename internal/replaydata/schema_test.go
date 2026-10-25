@@ -42,6 +42,32 @@ func TestExposedMethodSortSizeCapsVariableArguments(t *testing.T) {
 	}
 }
 
+func TestReadEntityUsesVariableLengthHeaderText(t *testing.T) {
+	var entity xmlNode
+	if err := xml.Unmarshal([]byte(`<root><ClientMethods><methodA><Arg>ARRAY<of>UINT8</of></Arg><VariableLengthHeaderSize>2</VariableLengthHeaderSize></methodA><methodB><Arg>ARRAY<of>UINT8</of></Arg><VariableLengthHeaderSize>1</VariableLengthHeaderSize></methodB></ClientMethods></root>`), &entity); err != nil {
+		t.Fatalf("xml.Unmarshal() error = %v", err)
+	}
+
+	var (
+		root       *os.Root
+		err        error
+		methods    []method
+		properties []property
+	)
+	if root, err = os.OpenRoot(t.TempDir()); err != nil {
+		t.Fatalf("os.OpenRoot() error = %v", err)
+	}
+	defer root.Close()
+
+	var schema *Schema = &Schema{}
+	if err = schema.readEntity(root, "", entity, make(map[string]bool), &properties, &methods, nil); err != nil {
+		t.Fatalf("readEntity() error = %v", err)
+	}
+	if len(methods) != 2 || methods[0].Size != 65537 || methods[1].Size != 65536 {
+		t.Fatalf("method sort sizes = %+v, want 65537 then 65536", methods)
+	}
+}
+
 // TestDecodeInitialStateReadsVehicleScalars checks team, alive, and health values from inline state.
 func TestDecodeInitialStateReadsVehicleScalars(t *testing.T) {
 	var (

@@ -28,9 +28,12 @@ type (
 		properties      map[string][]string
 		propertyTypes   map[string][]string
 		methods         map[string][]string
+		aliasFields     map[string][]property
+		aliasNodes      map[string]xmlNode
 		aliases         map[string]int
 		aliasPrimitives map[string]string
 		vehicles        map[uint64]Vehicle
+		planeIcons      map[uint64]string
 	}
 
 	xmlNode struct {
@@ -125,8 +128,10 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 	}
 
 	var (
-		aliases         map[string]int    = aliasSizes(aliasesXML.Children)
-		aliasPrimitives map[string]string = primitiveAliases(aliasesXML.Children)
+		aliases         map[string]int        = aliasSizes(aliasesXML.Children)
+		aliasPrimitives map[string]string     = primitiveAliases(aliasesXML.Children)
+		aliasFields     map[string][]property = aliasProperties(aliasesXML.Children)
+		aliasNodes      map[string]xmlNode    = aliasDefinitions(aliasesXML.Children)
 	)
 
 	schema = &Schema{
@@ -135,11 +140,27 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 		properties:      make(map[string][]string),
 		propertyTypes:   make(map[string][]string),
 		methods:         make(map[string][]string),
+		aliasFields:     aliasFields,
+		aliasNodes:      aliasNodes,
 		aliases:         aliases,
 		aliasPrimitives: aliasPrimitives,
 	}
 
 	schema.vehicles = make(map[uint64]Vehicle)
+	schema.planeIcons = make(map[uint64]string)
+	if planeData, readErr := root.ReadFile("plane_icons.json"); readErr == nil {
+		var icons []PlaneIcon
+		if err = json.Unmarshal(planeData, &icons); err != nil {
+			err = fmt.Errorf("decode plane icon catalog: %w", err)
+			return
+		}
+		for _, icon := range icons {
+			schema.planeIcons[icon.ID] = icon.Name
+		}
+	} else if !os.IsNotExist(readErr) {
+		err = readErr
+		return
+	}
 	if vehicleData, readErr := root.ReadFile("vehicles.json"); readErr == nil {
 		var vehicles []Vehicle
 		if err = json.Unmarshal(vehicleData, &vehicles); err != nil {
@@ -272,11 +293,8 @@ func (schema *Schema) readEntity(root *os.Root, defsPath string, node xmlNode, v
 					}
 
 					if field.XMLName.Local == "VariableLengthHeaderSize" {
-						for _, detail := range field.Children {
-							if parsedHeader, scanErr := strconv.Atoi(strings.TrimSpace(detail.Text)); scanErr == nil {
-								headerSize = parsedHeader
-								break
-							}
+						if parsedHeader, scanErr := strconv.Atoi(strings.TrimSpace(field.Text)); scanErr == nil {
+							headerSize = parsedHeader
 						}
 					}
 				}
@@ -428,6 +446,12 @@ func decodeInlinePrimitive(typeName string, primitive string, data []byte) (valu
 // Vehicle returns the ship catalog entry for a GameParams vehicle ID.
 func (schema *Schema) Vehicle(vehicleTypeID uint64) (vehicle Vehicle, ok bool) {
 	vehicle, ok = schema.vehicles[vehicleTypeID]
+	return
+}
+
+// PlaneIcon returns the game minimap icon name for a GameParams aircraft ID.
+func (schema *Schema) PlaneIcon(gameParamsID uint32) (name string, ok bool) {
+	name, ok = schema.planeIcons[uint64(gameParamsID)]
 	return
 }
 
@@ -585,6 +609,31 @@ func aliasSizes(definitions []xmlNode) (sizes map[string]int) {
 		resolve(name)
 	}
 
+	return
+}
+
+// aliasProperties preserves ordered fixed-dictionary fields needed for nested property paths.
+func aliasProperties(definitions []xmlNode) (properties map[string][]property) {
+	properties = make(map[string][]property)
+	for _, definition := range definitions {
+		for _, child := range definition.Children {
+			if child.XMLName.Local != "Properties" {
+				continue
+			}
+
+			for _, field := range child.Children {
+				properties[definition.XMLName.Local] = append(properties[definition.XMLName.Local], property{Name: field.XMLName.Local, Type: aliasType(field)})
+			}
+		}
+	}
+	return
+}
+
+func aliasDefinitions(definitions []xmlNode) (aliases map[string]xmlNode) {
+	aliases = make(map[string]xmlNode, len(definitions))
+	for _, definition := range definitions {
+		aliases[definition.XMLName.Local] = definition
+	}
 	return
 }
 

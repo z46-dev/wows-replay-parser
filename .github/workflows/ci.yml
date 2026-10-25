@@ -77,7 +77,6 @@ jobs:
       - name: Scan Go dependencies and code
         uses: golang/govulncheck-action@v1
         with:
-          repo-checkout: false
           go-version-file: go.mod
           go-package: ./...
 

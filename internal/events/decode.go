@@ -139,6 +139,19 @@ func DecodeWithSchema(replay *replayparser.Replay, schema *replaydata.Schema) (t
 			if schema != nil {
 				event.Created.EntityType = schema.EntityName(event.Created.EntityTypeID)
 				event.Created.InitialProperties, event.Created.InitialStateComplete = schema.DecodeInitialState(event.Created.EntityTypeID, event.Created.State)
+				if scores, recognized := schema.DecodeBattleLogicInitialScores(event.Created.EntityTypeID, event.Created.State); recognized {
+					for _, score := range scores {
+						timeline.Events = append(timeline.Events, Event{
+							Clock:    event.Clock,
+							Type:     TeamScoreEvent,
+							EntityID: event.EntityID,
+							TeamScore: &TeamScoreUpdate{
+								TeamIndex: score.TeamIndex,
+								Score:     score.Score,
+							},
+						})
+					}
+				}
 			}
 
 			timeline.Events = append(timeline.Events, event)
@@ -204,12 +217,44 @@ func DecodeWithSchema(replay *replayparser.Replay, schema *replaydata.Schema) (t
 					timeline.Events = append(timeline.Events, squadronEvent)
 				}
 
+				var deathEvent Event
+				if deathEvent, recognized, err = decodeShipDeath(event.Clock, *event.Member); err != nil {
+					err = fmt.Errorf("packet %d: %w", index, err)
+					return
+				} else if recognized {
+					timeline.Events = append(timeline.Events, deathEvent)
+				}
+
+				var damageEvents []Event
+				if damageEvents, recognized, err = decodeDamageReceived(event.Clock, event.EntityID, *event.Member); err != nil {
+					err = fmt.Errorf("packet %d: %w", index, err)
+					return
+				} else if recognized {
+					timeline.Events = append(timeline.Events, damageEvents...)
+				}
+
 				var torpedoEvent Event
 				if torpedoEvent, recognized, err = decodeTorpedoPosition(event.Clock, *event.Member); err != nil {
 					err = fmt.Errorf("packet %d: %w", index, err)
 					return
 				} else if recognized {
 					timeline.Events = append(timeline.Events, torpedoEvent)
+				}
+
+				var projectileEvents []Event
+				if projectileEvents, recognized, err = decodeProjectileMethod(event.Clock, *event.Member); err != nil {
+					err = fmt.Errorf("packet %d: %w", index, err)
+					return
+				} else if recognized {
+					timeline.Events = append(timeline.Events, projectileEvents...)
+				}
+
+				var victoryPointsEvent Event
+				if victoryPointsEvent, recognized, err = decodeVictoryPoints(event.Clock, event.EntityID, *event.Member); err != nil {
+					err = fmt.Errorf("packet %d: %w", index, err)
+					return
+				} else if recognized {
+					timeline.Events = append(timeline.Events, victoryPointsEvent)
 				}
 
 				var minimapEvents []Event
@@ -272,6 +317,19 @@ func DecodeWithSchema(replay *replayparser.Replay, schema *replaydata.Schema) (t
 			if event, err = decodeNestedProperty(packet); err != nil {
 				err = fmt.Errorf("packet %d: %w", index, err)
 				return
+			}
+			if schema != nil {
+				if teamIndex, score, recognized := schema.DecodeBattleLogicTeamScoreUpdate(entityTypes[event.EntityID], event.Member.Payload); recognized {
+					timeline.Events = append(timeline.Events, Event{
+						Clock:    event.Clock,
+						Type:     TeamScoreEvent,
+						EntityID: event.EntityID,
+						TeamScore: &TeamScoreUpdate{
+							TeamIndex: teamIndex,
+							Score:     score,
+						},
+					})
+				}
 			}
 
 			timeline.Events = append(timeline.Events, event)

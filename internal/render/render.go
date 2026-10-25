@@ -16,6 +16,8 @@ import (
 const (
 	designWidth  int = 1328
 	designHeight int = 800
+	// WinningScore is the score threshold used by the domination HUD.
+	WinningScore float64 = 1000
 )
 
 type (
@@ -34,17 +36,22 @@ type (
 		LeftPanelWidth  int
 		RightPanelWidth int
 		FooterHeight    int
+		TopBarHeight    int
 	}
 
 	// Player contains the lineup details displayed in a team sidebar.
 	Player struct {
+		EntityID           uint32
 		Name               string
 		ClanTag            string
 		ShipName           string
+		AccountDBID        uint64
 		Icon               image.Image
 		ClassIconDead      image.Image
 		ClassIconUnspotted image.Image
+		ClassOrder         int
 		Self               bool
+		Detected           bool
 		Health             float64
 		MaxHealth          float64
 		Damage             float64
@@ -56,6 +63,7 @@ type (
 
 	// Ship is one map marker at the requested replay time.
 	Ship struct {
+		EntityID        uint32
 		X               float64
 		Z               float64
 		Heading         float64
@@ -67,6 +75,7 @@ type (
 		Self            bool
 		Enemy           bool
 		Spotted         bool
+		DetectedByEnemy bool
 		VisibilityKnown bool
 		HasBeenSpotted  bool
 		Dead            bool
@@ -90,14 +99,16 @@ type (
 
 	// Squadron is an aircraft minimap marker at the requested replay time.
 	Squadron struct {
-		X         float64
-		Z         float64
-		TeamID    int64
-		TeamKnown bool
-		Enemy     bool
+		X            float64
+		Z            float64
+		TeamID       int64
+		TeamKnown    bool
+		Enemy        bool
+		GameParamsID uint32
+		IconName     string
 	}
 
-	// Torpedo marks a recently synchronized projectile at its world-space position.
+	// Torpedo marks a moving projectile at its world-space position.
 	Torpedo struct {
 		X         float64
 		Z         float64
@@ -107,26 +118,48 @@ type (
 		Enemy     bool
 	}
 
+	// ShellTracer is the visible segment of a shell's flight at one replay time.
+	ShellTracer struct {
+		TailX     float64
+		TailZ     float64
+		HeadX     float64
+		HeadZ     float64
+		TeamKnown bool
+		Enemy     bool
+		Self      bool
+	}
+
 	// Frame describes all content needed to render one replay moment.
 	Frame struct {
-		Layout            Layout
-		Map               image.Image
-		MapName           string
-		Clock             float64
-		Duration          float64
-		WorldBounds       Bounds
-		LeftTeamName      string
-		RightTeamName     string
-		LeftTeam          []Player
-		RightTeam         []Player
-		Ships             []Ship
-		Squadrons         []Squadron
-		Torpedoes         []Torpedo
-		AllySquadronIcon  image.Image
-		EnemySquadronIcon image.Image
-		CapturePoints     []CapturePoint
-		FooterText        string
-		Font              text.Face
+		Layout              Layout
+		Map                 image.Image
+		MapBuffer           *gg.ImageBuf
+		MapName             string
+		Clock               float64
+		Duration            float64
+		BattleLimit         float64
+		LeftStartingPoints  float64
+		RightStartingPoints float64
+		LeftTeamPoints      float64
+		RightTeamPoints     float64
+		LeftPointsPerSec    float64
+		RightPointsPerSec   float64
+		WorldBounds         Bounds
+		LeftTeamName        string
+		RightTeamName       string
+		LeftTeam            []Player
+		RightTeam           []Player
+		Ships               []Ship
+		Squadrons           []Squadron
+		PlaneIconNames      map[uint32]string
+		Torpedoes           []Torpedo
+		Shells              []ShellTracer
+		PlaneIcons          map[string]image.Image
+		KillIcon            image.Image
+		CapturePoints       []CapturePoint
+		FooterText          string
+		Font                text.Face
+		BoldFont            text.Face
 	}
 
 	shipAnnotation struct {
@@ -139,14 +172,15 @@ type (
 )
 
 var (
-	backgroundColor = color.RGBA{R: 8, G: 13, B: 22, A: 255}
-	panelColor      = color.RGBA{R: 10, G: 16, B: 27, A: 255}
-	gridColor       = color.RGBA{R: 28, G: 64, B: 72, A: 160}
-	captureColor    = color.RGBA{R: 248, G: 204, B: 92, A: 230}
-	leftColor       = color.RGBA{R: 64, G: 224, B: 151, A: 255}
-	rightColor      = color.RGBA{R: 244, G: 67, B: 74, A: 255}
-	textColor       = color.RGBA{R: 235, G: 239, B: 244, A: 255}
-	mutedColor      = color.RGBA{R: 146, G: 157, B: 171, A: 255}
+	backgroundColor  = color.RGBA{R: 8, G: 13, B: 22, A: 255}
+	panelColor       = color.RGBA{R: 10, G: 16, B: 27, A: 255}
+	gridColor        = color.RGBA{R: 28, G: 64, B: 72, A: 160}
+	captureColor     = color.RGBA{R: 248, G: 204, B: 92, A: 230}
+	leftColor        = color.RGBA{R: 64, G: 224, B: 151, A: 255}
+	rightColor       = color.RGBA{R: 244, G: 67, B: 74, A: 255}
+	textColor        = color.RGBA{R: 235, G: 239, B: 244, A: 255}
+	mutedColor       = color.RGBA{R: 146, G: 157, B: 171, A: 255}
+	topBarMutedColor = color.RGBA{R: 215, G: 221, B: 230, A: 255}
 )
 
 // RenderFrame draws the same design-sized HUD at the requested output scale without stretching its map.
@@ -160,7 +194,7 @@ func RenderFrame(frame Frame) (result image.Image, err error) {
 		layout.Height = designHeight
 	}
 
-	if layout.LeftPanelWidth < 0 || layout.RightPanelWidth < 0 || layout.FooterHeight < 0 || layout.LeftPanelWidth+layout.RightPanelWidth >= layout.Width || layout.FooterHeight >= layout.Height {
+	if layout.LeftPanelWidth < 0 || layout.RightPanelWidth < 0 || layout.FooterHeight < 0 || layout.TopBarHeight < 0 || layout.LeftPanelWidth+layout.RightPanelWidth >= layout.Width || layout.FooterHeight+layout.TopBarHeight >= layout.Height {
 		err = fmt.Errorf("invalid frame layout dimensions")
 		return
 	}
@@ -192,10 +226,11 @@ func RenderFrame(frame Frame) (result image.Image, err error) {
 			LeftPanelWidth:  int(math.Round(float64(layout.LeftPanelWidth) * float64(designWidth) / float64(layout.Width))),
 			RightPanelWidth: int(math.Round(float64(layout.RightPanelWidth) * float64(designWidth) / float64(layout.Width))),
 			FooterHeight:    int(math.Round(float64(layout.FooterHeight) * float64(designHeight) / float64(layout.Height))),
+			TopBarHeight:    int(math.Round(float64(layout.TopBarHeight) * float64(designHeight) / float64(layout.Height))),
 		}
-		footerTop   int             = designLayout.Height - designLayout.FooterHeight
-		mapArea     image.Rectangle = image.Rect(designLayout.LeftPanelWidth, 30, designLayout.Width-designLayout.RightPanelWidth, footerTop)
-		renderFrame Frame           = frame
+		contentBottom int             = designLayout.Height - designLayout.FooterHeight
+		mapArea       image.Rectangle = image.Rect(designLayout.LeftPanelWidth, designLayout.TopBarHeight, designLayout.Width-designLayout.RightPanelWidth, contentBottom)
+		renderFrame   Frame           = frame
 	)
 
 	renderFrame.Layout = designLayout
@@ -208,17 +243,17 @@ func RenderFrame(frame Frame) (result image.Image, err error) {
 		return
 	}
 
-	if err = drawSidebar(canvas, frame.LeftTeamName, frame.LeftTeam, 0, designLayout.LeftPanelWidth, footerTop, leftColor, frame.Font); err != nil {
+	if err = drawSidebar(canvas, frame.LeftTeamName, frame.LeftTeam, 0, designLayout.LeftPanelWidth, designLayout.TopBarHeight, contentBottom, leftColor, frame.Font, frame.BoldFont, frame.KillIcon); err != nil {
 		canvas.Pop()
 		return
 	}
 
-	if err = drawSidebar(canvas, frame.RightTeamName, frame.RightTeam, designLayout.Width-designLayout.RightPanelWidth, designLayout.RightPanelWidth, footerTop, rightColor, frame.Font); err != nil {
+	if err = drawSidebar(canvas, frame.RightTeamName, frame.RightTeam, designLayout.Width-designLayout.RightPanelWidth, designLayout.RightPanelWidth, designLayout.TopBarHeight, contentBottom, rightColor, frame.Font, frame.BoldFont, frame.KillIcon); err != nil {
 		canvas.Pop()
 		return
 	}
 
-	if err = drawFooter(canvas, renderFrame, footerTop); err != nil {
+	if err = drawTopBar(canvas, renderFrame, designLayout.TopBarHeight); err != nil {
 		canvas.Pop()
 		return
 	}
@@ -332,13 +367,16 @@ func drawMap(canvas *gg.Context, frame Frame, area image.Rectangle) (err error) 
 	}
 
 	var (
-		mapImage *gg.ImageBuf = gg.ImageBufFromImage(frame.Map)
+		mapImage *gg.ImageBuf = frame.MapBuffer
 		scale    float64      = math.Min(float64(area.Dx())/float64(mapBounds.Dx()), float64(area.Dy())/float64(mapBounds.Dy()))
 		width    float64      = float64(mapBounds.Dx()) * scale
 		height   float64      = float64(mapBounds.Dy()) * scale
 		left     float64      = float64(area.Min.X) + (float64(area.Dx())-width)/2
 		top      float64      = float64(area.Min.Y) + (float64(area.Dy())-height)/2
 	)
+	if mapImage == nil {
+		mapImage = gg.ImageBufFromImage(frame.Map)
+	}
 
 	canvas.Push()
 	canvas.ClipRect(float64(area.Min.X), float64(area.Min.Y), float64(area.Dx()), float64(area.Dy()))
@@ -444,6 +482,34 @@ func drawMap(canvas *gg.Context, frame Frame, area image.Rectangle) (err error) 
 		}
 	}
 
+	canvas.Push()
+	canvas.ClipRect(float64(mapRect.Min.X), float64(mapRect.Min.Y), float64(mapRect.Dx()), float64(mapRect.Dy()))
+	for _, shell := range frame.Shells {
+		var (
+			tailX, tailY float64    = mapPoint(frame.WorldBounds, mapRect, shell.TailX, shell.TailZ)
+			headX, headY float64    = mapPoint(frame.WorldBounds, mapRect, shell.HeadX, shell.HeadZ)
+			shotColor    color.RGBA = mutedColor
+		)
+		if shell.TeamKnown {
+			shotColor = leftColor
+			if shell.Enemy {
+				shotColor = rightColor
+			} else if shell.Self {
+				shotColor = textColor
+			}
+		}
+
+		canvas.SetColor(shotColor)
+		canvas.SetLineWidth(1.2)
+		canvas.MoveTo(tailX, tailY)
+		canvas.LineTo(headX, headY)
+		if err = canvas.Stroke(); err != nil {
+			canvas.Pop()
+			return
+		}
+	}
+	canvas.Pop()
+
 	for shipIndex, ship := range frame.Ships {
 		if ship.Enemy && !ship.HasBeenSpotted {
 			continue
@@ -547,7 +613,7 @@ func drawMap(canvas *gg.Context, frame Frame, area image.Rectangle) (err error) 
 					markerColor.A = 150
 				}
 
-				canvas.SetColor(markerColor)
+				canvas.SetColor(healthBarColor(ship.Health / ship.MaxHealth))
 				canvas.DrawRectangle(x-15, y+19, healthWidth, 2)
 				if err = canvas.Fill(); err != nil {
 					return
@@ -561,21 +627,20 @@ func drawMap(canvas *gg.Context, frame Frame, area image.Rectangle) (err error) 
 			continue
 		}
 
-		var (
-			x, y        float64     = mapPoint(frame.WorldBounds, mapRect, squadron.X, squadron.Z)
-			icon        image.Image = frame.AllySquadronIcon
-			markerColor color.RGBA  = leftColor
-		)
-
+		var suffix string = "_ally"
 		if squadron.Enemy {
-			icon = frame.EnemySquadronIcon
-			markerColor = rightColor
+			suffix = "_enemy"
+		}
+		if squadron.IconName == "" {
+			squadron.IconName = "consumables/fighter"
 		}
 
+		var (
+			x, y float64     = mapPoint(frame.WorldBounds, mapRect, squadron.X, squadron.Z)
+			icon image.Image = frame.PlaneIcons[squadron.IconName+suffix]
+		)
+
 		if icon == nil || icon.Bounds().Empty() {
-			if err = drawAircraftGlyph(canvas, x, y, markerColor); err != nil {
-				return
-			}
 			continue
 		}
 
@@ -608,34 +673,24 @@ func drawMap(canvas *gg.Context, frame Frame, area image.Rectangle) (err error) 
 			}
 		}
 
+		canvas.Push()
+		canvas.Translate(x, y)
 		canvas.SetColor(backgroundColor)
-		canvas.MoveTo(x, y-5)
-		canvas.LineTo(x+5, y)
-		canvas.LineTo(x, y+5)
-		canvas.LineTo(x-5, y)
-		canvas.ClosePath()
+		canvas.DrawCircle(0, 0, 5)
 
 		if err = canvas.Fill(); err != nil {
+			canvas.Pop()
 			return
 		}
 
 		canvas.SetColor(markerColor)
-		canvas.MoveTo(x, y-3)
-		canvas.LineTo(x+3, y)
-		canvas.LineTo(x, y+3)
-		canvas.LineTo(x-3, y)
-		canvas.ClosePath()
+		canvas.DrawCircle(0, 0, 3.5)
 
 		if err = canvas.Fill(); err != nil {
+			canvas.Pop()
 			return
 		}
-	}
-
-	if frame.Font != nil {
-		canvas.SetFont(frame.Font)
-		canvas.SetColor(textColor)
-		canvas.DrawString(frame.MapName, float64(area.Min.X)+12, 21)
-		canvas.DrawString(fmt.Sprintf("%s  /  %s", formatClock(frame.Clock), formatClock(frame.Duration)), float64(area.Min.X)+float64(area.Dx())-120, 21)
+		canvas.Pop()
 	}
 
 	return
@@ -687,40 +742,28 @@ func outlineShipIcon(source image.Image, outline color.RGBA) (result image.Image
 	return
 }
 
-// drawAircraftGlyph keeps squadron positions visible when game marker assets are unavailable.
-func drawAircraftGlyph(canvas *gg.Context, x float64, y float64, markerColor color.RGBA) (err error) {
-	canvas.Push()
-	canvas.Translate(x, y)
-	canvas.SetColor(markerColor)
-	canvas.MoveTo(0, -7)
-	canvas.LineTo(2, -1)
-	canvas.LineTo(7, 2)
-	canvas.LineTo(7, 4)
-	canvas.LineTo(1, 3)
-	canvas.LineTo(1, 7)
-	canvas.LineTo(3, 9)
-	canvas.LineTo(-3, 9)
-	canvas.LineTo(-1, 7)
-	canvas.LineTo(-1, 3)
-	canvas.LineTo(-7, 4)
-	canvas.LineTo(-7, 2)
-	canvas.LineTo(-2, -1)
-	canvas.ClosePath()
-	err = canvas.Fill()
-	canvas.Pop()
-	return
-}
+// drawSidebar renders a fixed twelve-slot roster with live health and combat stats.
+func drawSidebar(canvas *gg.Context, title string, players []Player, left int, width int, top int, bottom int, teamColor color.RGBA, face text.Face, boldFace text.Face, killIcon image.Image) (err error) {
+	var rightAligned bool = left > 0
+	var sidebarLeft float64 = float64(left)
+	var sidebarRight float64 = float64(left + width)
+	var textX float64 = sidebarLeft + 8
+	var iconX float64 = sidebarLeft + 8
+	var healthX float64 = sidebarLeft + 10
+	if rightAligned {
+		textX = sidebarRight - 8
+		iconX = sidebarRight - 36
+		healthX = sidebarRight - 10 - (float64(width)-20)/2
+	}
 
-// drawSidebar renders one team and its player health and damage values.
-func drawSidebar(canvas *gg.Context, title string, players []Player, left int, width int, height int, teamColor color.RGBA, face text.Face) (err error) {
 	canvas.SetColor(panelColor)
-	canvas.DrawRectangle(float64(left), 0, float64(width), float64(height))
+	canvas.DrawRectangle(float64(left), float64(top), float64(width), float64(bottom-top))
 	if err = canvas.Fill(); err != nil {
 		return
 	}
 
 	canvas.SetColor(teamColor)
-	canvas.DrawRectangle(float64(left), 0, float64(width), 34)
+	canvas.DrawRectangle(float64(left), float64(top), float64(width), 34)
 	if err = canvas.Fill(); err != nil {
 		return
 	}
@@ -731,64 +774,153 @@ func drawSidebar(canvas *gg.Context, title string, players []Player, left int, w
 
 	canvas.SetFont(face)
 	canvas.SetColor(backgroundColor)
-	canvas.DrawString(strings.ToUpper(title), float64(left)+10, 23)
+	canvas.DrawString(strings.ToUpper(title), float64(left)+10, float64(top)+23)
 
-	var (
-		rowHeight float64 = math.Min(112, float64(height-34)/math.Max(1, float64(len(players))))
-		rowsTop   float64 = 34 + math.Max(0, float64(height-34)-rowHeight*float64(len(players)))/2
-	)
-
+	var rowHeight float64 = float64(bottom-top-34) / 12
 	for index, player := range players {
-		var y float64 = rowsTop + float64(index)*rowHeight
+		if index >= 12 {
+			break
+		}
+
+		var y float64 = float64(top+34) + float64(index)*rowHeight
 		canvas.SetColor(color.RGBA{R: 28, G: 36, B: 48, A: 255})
 		canvas.DrawRectangle(float64(left)+4, y+rowHeight-1, float64(width)-8, 1)
 		if err = canvas.Fill(); err != nil {
 			return
 		}
 
-		canvas.SetColor(textColor)
 		var playerName string = playerLabel(player)
 		if player.Self {
 			playerName += "  YOU"
 		}
 
-		canvas.DrawString(playerName, float64(left)+10, y+16)
-		if player.Icon != nil {
-			var iconBounds image.Rectangle = player.Icon.Bounds()
-			if !iconBounds.Empty() {
-				var (
-					iconHeight float64 = 14
-					iconScale  float64 = math.Min(52/float64(iconBounds.Dx()), iconHeight/float64(iconBounds.Dy()))
-				)
+		var nameColor color.RGBA = textColor
+		if player.Detected {
+			nameColor = color.RGBA{R: 255, G: 220, B: 80, A: 255}
+		}
+		if player.Detected && player.Self {
+			nameColor = textColor
+		}
+		if player.Alive {
+			canvas.SetColor(nameColor)
+		} else {
+			canvas.SetColor(mutedColor)
+		}
+		if boldFace != nil {
+			canvas.SetFont(boldFace)
+		} else {
+			canvas.SetFont(face)
+		}
+		canvas.Push()
+		var textClipX float64 = float64(left) + 8
+		if rightAligned {
+			textClipX = float64(left) + 96
+		}
+		canvas.ClipRect(textClipX, y+2, float64(width)-104, rowHeight-3)
+		canvas.Translate(textX, y+16)
+		if rightAligned {
+			canvas.DrawStringAnchored(playerName, 0, 0, 1, 0.5)
+		} else {
+			canvas.DrawString(playerName, 0, 0)
+		}
+		canvas.Pop()
 
+		canvas.SetFont(face)
+		var statColor color.RGBA = textColor
+		if !player.Alive {
+			statColor = mutedColor
+		}
+		canvas.SetColor(statColor)
+		var damageAnchor float64 = float64(left + width - 10)
+		var statRight float64 = float64(left+width) - 62
+		if rightAligned {
+			damageAnchor = float64(left + 10)
+			statRight = float64(left + 62)
+			canvas.DrawStringAnchored(formatDamage(player.Damage), damageAnchor, y+16, 0, 0.5)
+		} else {
+			canvas.DrawStringAnchored(formatDamage(player.Damage), damageAnchor, y+16, 1, 0.5)
+		}
+		if killIcon != nil {
+			var iconBounds image.Rectangle = killIcon.Bounds()
+			if !iconBounds.Empty() {
+				var iconScale float64 = math.Min(13/float64(iconBounds.Dx()), 13/float64(iconBounds.Dy()))
 				canvas.Push()
-				canvas.Translate(float64(left)+10, y+22)
+				if rightAligned {
+					canvas.Translate(statRight+13, y+9)
+					canvas.Scale(-iconScale, iconScale)
+				} else {
+					canvas.Translate(statRight, y+9)
+					canvas.Scale(iconScale, iconScale)
+				}
+				canvas.DrawImage(gg.ImageBufFromImage(killIcon), 0, 0)
+				canvas.Pop()
+				statRight += 16
+			}
+		}
+		if rightAligned {
+			canvas.DrawStringAnchored(formatDamage(player.Kills), statRight, y+16, 1, 0.5)
+		} else {
+			canvas.DrawString(formatDamage(player.Kills), statRight, y+16)
+		}
+
+		if player.ClassIcon != nil {
+			var iconBounds image.Rectangle = player.ClassIcon.Bounds()
+			if !iconBounds.Empty() {
+				var iconScale float64 = math.Min(28/float64(iconBounds.Dx()), 13/float64(iconBounds.Dy()))
+				canvas.Push()
+				if rightAligned {
+					canvas.Translate(iconX+14, y+26)
+					canvas.Rotate(-math.Pi / 2)
+				} else {
+					canvas.Translate(iconX+14, y+26)
+					canvas.Rotate(math.Pi / 2)
+				}
 				canvas.Scale(iconScale, iconScale)
-				canvas.DrawImage(gg.ImageBufFromImage(player.Icon), 0, 0)
+				canvas.DrawImage(gg.ImageBufFromImage(player.ClassIcon), -float64(iconBounds.Dx())/2, -float64(iconBounds.Dy())/2)
 				canvas.Pop()
 			}
 		}
-
 		canvas.SetColor(mutedColor)
-		canvas.DrawString(player.ShipName, float64(left)+68, y+36)
-		canvas.SetColor(textColor)
-		canvas.DrawString(fmt.Sprintf("HP %.0f / %.0f", player.Health, player.MaxHealth), float64(left)+10, y+51)
-		canvas.DrawStringAnchored(fmt.Sprintf("DMG %s  K %s  %s", formatDamage(player.Damage), formatDamage(player.Kills), aliveLabel(player.Alive)), float64(left)+float64(width)-10, y+51, 1, 0.5)
+		canvas.SetFont(face)
+		if rightAligned {
+			canvas.DrawStringAnchored(player.ShipName, iconX-8, y+31, 1, 0.5)
+		} else {
+			canvas.DrawString(player.ShipName, float64(left)+40, y+31)
+		}
 
-		var healthWidth float64
+		var (
+			healthBarWidth float64 = (float64(width) - 20) / 2
+			healthWidth    float64
+			healthY        float64 = y + rowHeight - 17
+		)
 		if player.MaxHealth > 0 {
-			healthWidth = math.Max(0, math.Min(1, player.Health/player.MaxHealth)) * (float64(width) - 20)
+			healthWidth = math.Max(0, math.Min(1, player.Health/player.MaxHealth)) * healthBarWidth
 		}
 
 		canvas.SetColor(color.RGBA{R: 44, G: 55, B: 67, A: 255})
-		canvas.DrawRectangle(float64(left)+10, y+rowHeight-3, float64(width)-20, 2)
+		canvas.DrawRectangle(healthX, healthY, healthBarWidth, 13)
 		if err = canvas.Fill(); err != nil {
 			return
 		}
 
 		if healthWidth > 0 {
-			canvas.SetColor(teamColor)
-			canvas.DrawRectangle(float64(left)+10, y+rowHeight-3, healthWidth, 2)
+			canvas.SetColor(healthBarColor(player.Health / player.MaxHealth))
+			if rightAligned {
+				canvas.DrawRectangle(healthX+healthBarWidth-healthWidth, healthY, healthWidth, 13)
+			} else {
+				canvas.DrawRectangle(healthX, healthY, healthWidth, 13)
+			}
+			if err = canvas.Fill(); err != nil {
+				return
+			}
+		}
+		canvas.SetFont(face)
+		canvas.SetColor(textColor)
+		canvas.DrawStringAnchored(fmt.Sprintf("%.0f / %.0f", player.Health, player.MaxHealth), healthX+healthBarWidth/2, healthY+10, 0.5, 0.5)
+
+		if !player.Alive {
+			canvas.SetColor(color.RGBA{R: 55, G: 60, B: 68, A: 155})
+			canvas.DrawRectangle(float64(left)+4, y, float64(width)-8, rowHeight-1)
 			if err = canvas.Fill(); err != nil {
 				return
 			}
@@ -813,6 +945,76 @@ func drawFooter(canvas *gg.Context, frame Frame, top int) (err error) {
 	canvas.SetFont(frame.Font)
 	canvas.SetColor(mutedColor)
 	canvas.DrawString(frame.FooterText, 14, float64(top)+float64(frame.Layout.FooterHeight)/2+5)
+	return
+}
+
+// drawTopBar paints the battle countdown and score progress without adding other HUD content.
+func drawTopBar(canvas *gg.Context, frame Frame, height int) (err error) {
+	if height <= 0 {
+		return
+	}
+
+	canvas.SetColor(backgroundColor)
+	canvas.DrawRectangle(0, 0, float64(frame.Layout.Width), float64(height))
+	if err = canvas.Fill(); err != nil {
+		return
+	}
+
+	var (
+		center        float64   = float64(frame.Layout.Width) / 2
+		barWidth      float64   = center
+		leftProgress  float64   = math.Max(0, math.Min(1, frame.LeftTeamPoints/WinningScore))
+		rightProgress float64   = math.Max(0, math.Min(1, frame.RightTeamPoints/WinningScore))
+		font          text.Face = frame.BoldFont
+	)
+	if font == nil {
+		font = frame.Font
+	}
+
+	canvas.SetColor(leftColor)
+	canvas.DrawRectangle(0, 0, barWidth*leftProgress, float64(height))
+	if err = canvas.Fill(); err != nil {
+		return
+	}
+	canvas.SetColor(rightColor)
+	canvas.DrawRectangle(float64(frame.Layout.Width)-barWidth*rightProgress, 0, barWidth*rightProgress, float64(height))
+	if err = canvas.Fill(); err != nil || font == nil {
+		return
+	}
+
+	canvas.SetFont(font)
+	canvas.SetColor(textColor)
+	canvas.DrawStringAnchored(fmt.Sprintf("%.0f", frame.LeftTeamPoints), 12, float64(height)/2+6, 0, 0.5)
+	canvas.SetColor(topBarMutedColor)
+	canvas.Push()
+	canvas.Translate(65, float64(height)/2+6)
+	canvas.Scale(0.8, 0.8)
+	canvas.DrawStringAnchored(formatTimeToWin(frame.LeftTeamPoints, frame.LeftPointsPerSec), 0, 0, 0, 0.5)
+	canvas.Pop()
+	canvas.SetColor(textColor)
+	canvas.DrawStringAnchored(fmt.Sprintf("%.0f", frame.RightTeamPoints), float64(frame.Layout.Width)-12, float64(height)/2+6, 1, 0.5)
+	canvas.SetColor(topBarMutedColor)
+	canvas.Push()
+	canvas.Translate(float64(frame.Layout.Width)-65, float64(height)/2+6)
+	canvas.Scale(0.8, 0.8)
+	canvas.DrawStringAnchored(formatTimeToWin(frame.RightTeamPoints, frame.RightPointsPerSec), 0, 0, 1, 0.5)
+	canvas.Pop()
+
+	if frame.BattleLimit > 0 {
+		canvas.SetColor(textColor)
+		canvas.DrawStringAnchored(formatClock(frame.BattleLimit-frame.Clock), center, float64(height)/2+6, 0.5, 0.5)
+	}
+	return
+}
+
+// formatTimeToWin estimates remaining score time from the recent authoritative score rate.
+func formatTimeToWin(points float64, pointsPerSecond float64) (formatted string) {
+	if pointsPerSecond <= 0 || points >= WinningScore {
+		formatted = "--:--"
+		return
+	}
+
+	formatted = formatClock((WinningScore - points) / pointsPerSecond)
 	return
 }
 
@@ -854,20 +1056,30 @@ func formatDamage(damage float64) (formatted string) {
 	return
 }
 
-// aliveLabel identifies a player's post-battle survival state.
-func aliveLabel(alive bool) (label string) {
-	if alive {
-		label = "ALIVE"
-	} else {
-		label = "SUNK"
-	}
-
-	return
+// SortPlayers orders classes, ship names, and survival state deterministically.
+func SortPlayers(players []Player) {
+	sort.SliceStable(players, func(left int, right int) bool {
+		if players[left].Alive != players[right].Alive {
+			return players[left].Alive
+		}
+		if players[left].ClassOrder != players[right].ClassOrder {
+			return players[left].ClassOrder < players[right].ClassOrder
+		}
+		if players[left].ShipName != players[right].ShipName {
+			return strings.ToLower(players[left].ShipName) < strings.ToLower(players[right].ShipName)
+		}
+		return strings.ToLower(players[left].Name) < strings.ToLower(players[right].Name)
+	})
 }
 
-// SortPlayers sorts a lineup by player name for deterministic frame generation.
-func SortPlayers(players []Player) {
-	sort.Slice(players, func(left int, right int) bool {
-		return players[left].Name < players[right].Name
-	})
+// healthBarColor matches the game's three-band green/yellow/red HP cue.
+func healthBarColor(fraction float64) (healthColor color.RGBA) {
+	if fraction > 0.66 {
+		healthColor = color.RGBA{R: 0, G: 255, B: 0, A: 255}
+	} else if fraction > 0.33 {
+		healthColor = color.RGBA{R: 255, G: 255, B: 0, A: 255}
+	} else {
+		healthColor = color.RGBA{R: 255, A: 255}
+	}
+	return
 }

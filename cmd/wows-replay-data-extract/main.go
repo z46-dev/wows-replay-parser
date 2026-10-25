@@ -52,6 +52,7 @@ func extract(args arguments) (err error) {
 		silhouettesPath   string = filepath.Join(args.InstallPath, "res_unpack", "gui", "ships_silhouettes")
 		classIconsPath    string = filepath.Join(args.InstallPath, "res_unpack", "gui", "fla", "minimap", "ship_icons")
 		squadronIconsPath string = filepath.Join(args.InstallPath, "res_unpack", "gui", "grand_strategy_pass", "pawns")
+		planeIconsPath    string = filepath.Join(args.InstallPath, "res_unpack", "gui", "battle_hud", "markers_minimap", "plane")
 		buildNumber       string = strings.TrimPrefix(args.Version[strings.LastIndex(args.Version, ".")+1:], ".")
 		localizationPath  string = filepath.Join(args.InstallPath, "bin", buildNumber, "res", "texts", "en", "LC_MESSAGES", "global.mo")
 		outputPath        string = args.OutputPath
@@ -160,6 +161,7 @@ func extract(args arguments) (err error) {
 		paramsFile, localizationFile *os.File
 		localizedNames               map[string]string
 		vehicles                     []replaydata.Vehicle
+		planeIcons                   []replaydata.PlaneIcon
 	)
 
 	if localizationFile, err = os.Open(localizationPath); err != nil { // #nosec G304 -- validated version path under the selected install.
@@ -195,6 +197,17 @@ func extract(args arguments) (err error) {
 	if err = paramsFile.Close(); err != nil {
 		return
 	}
+	if paramsFile, err = os.Open(gameParamsJSONPath); err != nil { // #nosec G304 -- generated path is inside the staging directory.
+		return
+	}
+	if planeIcons, err = replaydata.ParsePlaneIcons(paramsFile); err != nil {
+		err = fmt.Errorf("parse GameParams aircraft icon catalog: %w", err)
+		err = errors.Join(err, paramsFile.Close())
+		return
+	}
+	if err = paramsFile.Close(); err != nil {
+		return
+	}
 
 	if err = os.Remove(gameParamsJSONPath); err != nil {
 		return
@@ -212,6 +225,16 @@ func extract(args arguments) (err error) {
 
 	var vehicleHash [32]byte = sha256.Sum256(vehicleData)
 	files["vehicles.json"] = hex.EncodeToString(vehicleHash[:])
+	var planeIconData []byte
+	if planeIconData, err = json.MarshalIndent(planeIcons, "", "  "); err != nil {
+		return
+	}
+	planeIconData = append(planeIconData, '\n')
+	if err = os.WriteFile(filepath.Join(stagingPath, "plane_icons.json"), planeIconData, 0o644); err != nil {
+		return
+	}
+	var planeIconHash [32]byte = sha256.Sum256(planeIconData)
+	files["plane_icons.json"] = hex.EncodeToString(planeIconHash[:])
 	if err = copyShipSilhouettes(silhouettesPath, stagingPath, vehicles, files); err != nil {
 		return
 	}
@@ -221,6 +244,9 @@ func extract(args arguments) (err error) {
 	}
 
 	if err = copySquadronIcons(squadronIconsPath, stagingPath, files); err != nil {
+		return
+	}
+	if err = copyPlaneIcons(planeIconsPath, stagingPath, files); err != nil {
 		return
 	}
 
@@ -248,6 +274,25 @@ func extract(args arguments) (err error) {
 	}
 
 	fmt.Printf("Extracted %d schema files for %s to %s\n", len(files), args.Version, outputPath)
+	return
+}
+
+// copyPlaneIcons packages only the game's minimap aircraft marker variants.
+func copyPlaneIcons(sourceDirectory string, packageDirectory string, files map[string]string) (err error) {
+	err = filepath.WalkDir(sourceDirectory, func(source string, entry os.DirEntry, walkErr error) (callbackErr error) {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || strings.ToLower(filepath.Ext(entry.Name())) != ".png" {
+			return
+		}
+		var relativePath string
+		if relativePath, callbackErr = filepath.Rel(sourceDirectory, source); callbackErr != nil {
+			return
+		}
+		var packagePath string = filepath.Join("plane_icons", relativePath)
+		return copyFile(source, filepath.Join(packageDirectory, packagePath), packagePath, files)
+	})
 	return
 }
 

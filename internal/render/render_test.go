@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"testing"
 
+	"github.com/gogpu/gg"
 	"github.com/gogpu/gg/text"
 	"golang.org/x/image/font/gofont/goregular"
 )
@@ -122,6 +123,25 @@ func TestRenderFrameRejectsMissingMap(t *testing.T) {
 	}
 }
 
+func TestSortPlayersPutsAliveFirstThenOrdersByClassAndShip(t *testing.T) {
+	var players []Player = []Player{
+		{Name: "Dead", ShipName: "Zulu", ClassOrder: 1, Alive: false},
+		{Name: "Sub", ShipName: "Alpha", ClassOrder: 4, Alive: true},
+		{Name: "Alive", ShipName: "Zulu", ClassOrder: 1, Alive: true},
+		{Name: "Carrier", ShipName: "Zulu", ClassOrder: 0, Alive: true},
+	}
+	SortPlayers(players)
+	if players[0].Name != "Carrier" || players[1].Name != "Alive" || players[2].Name != "Sub" || players[3].Name != "Dead" {
+		t.Fatalf("sorted players = %+v", players)
+	}
+}
+
+func TestHealthBarColorMatchesToolkitBands(t *testing.T) {
+	if healthBarColor(0.8) != (color.RGBA{G: 255, A: 255}) || healthBarColor(0.5) != (color.RGBA{R: 255, G: 255, A: 255}) || healthBarColor(0.2) != (color.RGBA{R: 255, A: 255}) {
+		t.Fatal("healthBarColor() should transition through green, yellow, and red bands")
+	}
+}
+
 // TestRenderFrameDistinguishesShipVisibilityAndDeath checks all three tactical marker states.
 func TestRenderFrameDistinguishesShipVisibilityAndDeath(t *testing.T) {
 	var (
@@ -227,14 +247,29 @@ func TestRenderFrameShowsVehicleHealthBar(t *testing.T) {
 	}
 }
 
-// TestRenderFrameShowsSquadronMarkers checks aircraft stay visible without optional image assets.
+// TestRenderFrameShowsSquadronMarkers checks rendering uses each side's resolved plane icon.
 func TestRenderFrameShowsSquadronMarkers(t *testing.T) {
+	var (
+		allyIcon  *image.RGBA = image.NewRGBA(image.Rect(0, 0, 5, 5))
+		enemyIcon *image.RGBA = image.NewRGBA(image.Rect(0, 0, 5, 5))
+	)
+	for y := 0; y < 5; y++ {
+		for x := 0; x < 5; x++ {
+			allyIcon.SetRGBA(x, y, color.RGBA{R: 20, G: 220, B: 80, A: 255})
+			enemyIcon.SetRGBA(x, y, color.RGBA{R: 230, G: 30, B: 40, A: 255})
+		}
+	}
+
 	var (
 		frame Frame = Frame{
 			Layout:      Layout{Width: 400, Height: 300, LeftPanelWidth: 80, RightPanelWidth: 80, FooterHeight: 30},
 			Map:         image.NewRGBA(image.Rect(0, 0, 100, 100)),
 			WorldBounds: Bounds{MinX: -100, MaxX: 100, MinZ: -100, MaxZ: 100},
-			Squadrons:   []Squadron{{X: -20, Z: 10}, {X: 20, Z: -10, Enemy: true}},
+			Squadrons:   []Squadron{{X: -20, Z: 10, IconName: "controllable/fighter_he"}, {X: 20, Z: -10, Enemy: true, IconName: "airsupport/bomber_mine"}},
+			PlaneIcons: map[string]image.Image{
+				"controllable/fighter_he_ally": allyIcon,
+				"airsupport/bomber_mine_enemy": enemyIcon,
+			},
 		}
 		withAircraft image.Image
 		err          error
@@ -285,11 +320,62 @@ func TestRenderFrameShowsTorpedoMarkers(t *testing.T) {
 	}
 }
 
+// TestRenderFrameShowsShellTracers verifies in-flight shells are drawn over the map.
+func TestRenderFrameShowsShellTracers(t *testing.T) {
+	var (
+		frame Frame = Frame{
+			Layout:      Layout{Width: 400, Height: 300, LeftPanelWidth: 80, RightPanelWidth: 80, FooterHeight: 30},
+			Map:         image.NewRGBA(image.Rect(0, 0, 100, 100)),
+			WorldBounds: Bounds{MinX: -100, MaxX: 100, MinZ: -100, MaxZ: 100},
+			Shells:      []ShellTracer{{TailX: -25, TailZ: 10, HeadX: 25, HeadZ: -10, TeamKnown: true, Enemy: true}},
+		}
+		withShells image.Image
+		err        error
+	)
+
+	if withShells, err = RenderFrame(frame); err != nil {
+		t.Fatalf("RenderFrame(shells) error = %v", err)
+	}
+
+	frame.Shells = nil
+	var withoutShells image.Image
+	if withoutShells, err = RenderFrame(frame); err != nil {
+		t.Fatalf("RenderFrame(without shells) error = %v", err)
+	}
+
+	if imagesEqual(withShells, withoutShells) {
+		t.Fatal("shell tracers should add visible flight paths to the map")
+	}
+}
+
+// TestRenderFrameUsesPreparedMapBufferWithoutChangingPixels covers the video-export cache path.
+func TestRenderFrameUsesPreparedMapBufferWithoutChangingPixels(t *testing.T) {
+	var frame Frame = Frame{
+		Layout:      Layout{Width: 400, Height: 300, LeftPanelWidth: 80, RightPanelWidth: 80, FooterHeight: 30},
+		Map:         image.NewRGBA(image.Rect(0, 0, 100, 100)),
+		WorldBounds: Bounds{MinX: -100, MaxX: 100, MinZ: -100, MaxZ: 100},
+	}
+	var uncached image.Image
+	var err error
+	if uncached, err = RenderFrame(frame); err != nil {
+		t.Fatalf("RenderFrame(uncached map) error = %v", err)
+	}
+
+	frame.MapBuffer = gg.ImageBufFromImage(frame.Map)
+	var cached image.Image
+	if cached, err = RenderFrame(frame); err != nil {
+		t.Fatalf("RenderFrame(prepared map) error = %v", err)
+	}
+	if !imagesEqual(uncached, cached) {
+		t.Fatal("prepared map buffer should render the same pixels as the source map")
+	}
+}
+
 // TestRenderFrameScalesTheWholeHUDWithOutputResolution verifies text and markers keep design proportions.
 func TestRenderFrameScalesTheWholeHUDWithOutputResolution(t *testing.T) {
 	var (
 		frame Frame = Frame{
-			Layout:      Layout{Width: 1328, Height: 800, LeftPanelWidth: 280, RightPanelWidth: 280, FooterHeight: 48},
+			Layout:      Layout{Width: 1328, Height: 800, LeftPanelWidth: 280, RightPanelWidth: 280, TopBarHeight: 40},
 			Map:         image.NewRGBA(image.Rect(0, 0, 100, 100)),
 			WorldBounds: Bounds{MinX: -100, MaxX: 100, MinZ: -100, MaxZ: 100},
 			Torpedoes:   []Torpedo{{X: 0, Z: 0, TeamKnown: true}},
@@ -302,7 +388,7 @@ func TestRenderFrameScalesTheWholeHUDWithOutputResolution(t *testing.T) {
 		t.Fatalf("RenderFrame(base) error = %v", err)
 	}
 
-	frame.Layout = Layout{Width: 2656, Height: 1600, LeftPanelWidth: 560, RightPanelWidth: 560, FooterHeight: 96}
+	frame.Layout = Layout{Width: 2656, Height: 1600, LeftPanelWidth: 560, RightPanelWidth: 560, TopBarHeight: 80}
 
 	var doubled image.Image
 	if doubled, err = RenderFrame(frame); err != nil {
@@ -313,8 +399,18 @@ func TestRenderFrameScalesTheWholeHUDWithOutputResolution(t *testing.T) {
 		t.Fatalf("rendered output bounds = %v and %v, want 1328x800 and 2656x1600", base.Bounds(), doubled.Bounds())
 	}
 
-	if base.At(664, 391) != doubled.At(1328, 782) {
-		t.Fatalf("center torpedo marker changed color across scales: %v != %v", base.At(664, 391), doubled.At(1328, 782))
+	if base.At(664, 420) != doubled.At(1328, 840) {
+		t.Fatalf("center torpedo marker changed color across scales: %v != %v", base.At(664, 420), doubled.At(1328, 840))
+	}
+}
+
+// TestFormatTimeToWinUsesTheCurrentRateAndHidesUnavailableEstimates protects the HUD estimate semantics.
+func TestFormatTimeToWinUsesTheCurrentRateAndHidesUnavailableEstimates(t *testing.T) {
+	if formatTimeToWin(400, 1.2) != "08:20" {
+		t.Fatalf("formatTimeToWin(400, 1.2) = %q, want 08:20", formatTimeToWin(400, 1.2))
+	}
+	if formatTimeToWin(400, 0) != "--:--" || formatTimeToWin(1000, 1.2) != "--:--" {
+		t.Fatal("time-to-win should be hidden when there is no scoring rate or the target is reached")
 	}
 }
 

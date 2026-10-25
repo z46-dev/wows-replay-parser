@@ -26,3 +26,23 @@ func TestParseVehicles(t *testing.T) {
 		t.Fatalf("ParseVehicles returned %#v, expected %#v", vehicles, expected)
 	}
 }
+
+// TestParsePlaneIcons follows the game's aircraft species and ammunition icon convention.
+func TestParsePlaneIcons(t *testing.T) {
+	const data string = `{
+		"fighter_param":{"id":1,"typeinfo":{"type":"Aircraft","species":"Fighter"},"planeSubtype":["controllable"],"bombName":"projectile"},
+		"projectile":{"typeinfo":{"type":"Projectile"},"ammoType":"HE"},
+		"asw_param":{"id":2,"typeinfo":{"type":"Aircraft","species":"Dive"},"planeSubtype":["airsupport"],"bombName":"depth"},
+		"depth":{"typeinfo":{"type":"Projectile"},"ammoType":"DepthCharge"},
+		"mine_plane":{"id":3,"typeinfo":{"type":"Aircraft","species":"Dive"},"planeSubtype":["airsupport"],"bombName":"mine"},
+		"mine":{"typeinfo":{"type":"Projectile"},"ammoType":"seaMine"}
+	}`
+	var icons []PlaneIcon
+	var err error
+	if icons, err = ParsePlaneIcons(strings.NewReader(data)); err != nil {
+		t.Fatalf("ParsePlaneIcons returned an error: %v", err)
+	}
+	if len(icons) != 3 || icons[0] != (PlaneIcon{ID: 1, Name: "controllable/fighter_he"}) || icons[1] != (PlaneIcon{ID: 2, Name: "airsupport/bomber_depth_charge"}) || icons[2] != (PlaneIcon{ID: 3, Name: "airsupport/bomber_mine"}) {
+		t.Fatalf("ParsePlaneIcons returned %#v", icons)
+	}
+}

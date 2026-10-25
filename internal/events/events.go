@@ -236,6 +236,20 @@ type (
 		Delta    float32 `json:"delta"`
 	}
 
+	// ShipDeath records the victim and killer entity IDs from receiveVehicleDeath.
+	ShipDeath struct {
+		VictimID uint32 `json:"victimID"`
+		KillerID uint32 `json:"killerID"`
+		Cause    uint32 `json:"cause"`
+	}
+
+	// ShipDamageDealt records one server-attributed aggressor update on a victim ship.
+	ShipDamageDealt struct {
+		VictimID    uint32  `json:"victimID"`
+		AggressorID uint32  `json:"aggressorID"`
+		Damage      float32 `json:"damage"`
+	}
+
 	// SpottedEntities is the complete set of ships currently visible to the replay client.
 	SpottedEntities struct {
 		EntityIDs []uint32 `json:"entityIDs"`
@@ -268,31 +282,86 @@ type (
 		Position Position `json:"position"`
 	}
 
+	// ArtilleryShot records one shell in a received salvo.
+	ArtilleryShot struct {
+		OwnerID        uint32   `json:"ownerID"`
+		ParamsID       uint32   `json:"paramsID"`
+		SalvoID        int32    `json:"salvoID"`
+		ShotID         uint16   `json:"shotID"`
+		Origin         Position `json:"origin"`
+		Target         Position `json:"target"`
+		Speed          float32  `json:"speed"`
+		ServerTimeLeft float32  `json:"serverTimeLeft"`
+	}
+
+	// TorpedoLaunch records initial position and velocity for one launched torpedo.
+	TorpedoLaunch struct {
+		OwnerID   uint32   `json:"ownerID"`
+		ShotID    uint16   `json:"shotID"`
+		Position  Position `json:"position"`
+		Direction Position `json:"direction"`
+	}
+
+	// TorpedoDirection records a heading and origin update for one torpedo.
+	TorpedoDirection struct {
+		OwnerID   uint32   `json:"ownerID"`
+		ShotID    uint16   `json:"shotID"`
+		Position  Position `json:"position"`
+		TargetYaw float32  `json:"targetYaw"`
+		SpeedCoef float32  `json:"speedCoef"`
+	}
+
+	// ProjectileHit identifies a shell or torpedo removed by a shot-kill update.
+	ProjectileHit struct {
+		OwnerID  uint32   `json:"ownerID"`
+		ShotID   uint16   `json:"shotID"`
+		Position Position `json:"position"`
+	}
+
+	// VictoryPointUpdate preserves the score total transmitted to the replay player's client.
+	VictoryPointUpdate struct {
+		TotalPoints float32 `json:"totalPoints"`
+	}
+
+	// TeamScoreUpdate records an authoritative score assigned to one battle team.
+	TeamScoreUpdate struct {
+		TeamIndex int64  `json:"teamIndex"`
+		Score     uint16 `json:"score"`
+	}
+
 	// Event is one decoded replay event at a game clock value.
 	Event struct {
-		Clock      float32              `json:"clock"`
-		Type       Type                 `json:"type"`
-		EntityID   uint32               `json:"entityID,omitempty"`
-		ParentID   uint32               `json:"parentID,omitempty"`
-		Controlled *bool                `json:"controlled,omitempty"`
-		Position   *Position            `json:"position,omitempty"`
-		Created    *EntityCreate        `json:"created,omitempty"`
-		Bootstrap  *EntityBootstrap     `json:"bootstrap,omitempty"`
-		Member     *EntityMember        `json:"member,omitempty"`
-		Map        *MapState            `json:"map,omitempty"`
-		Payload    []byte               `json:"payload,omitempty"`
-		WeaponLock *WeaponLock          `json:"weaponLock,omitempty"`
-		GunMarker  *GunMarker           `json:"gunMarker,omitempty"`
-		Camera     *Camera              `json:"camera,omitempty"`
-		NetStats   *PlayerNetStats      `json:"netStats,omitempty"`
-		Scalar     *Scalar              `json:"scalar,omitempty"`
-		Cruise     *CruiseState         `json:"cruise,omitempty"`
-		Health     *ShipHealth          `json:"health,omitempty"`
-		Visibility *SpottedEntities     `json:"visibility,omitempty"`
-		Squadron   *MinimapSquadron     `json:"squadron,omitempty"`
-		Minimap    *MinimapShipPosition `json:"minimap,omitempty"`
-		Torpedo    *TorpedoPosition     `json:"torpedo,omitempty"`
-		Results    *BattleResults       `json:"results,omitempty"`
+		Clock            float32              `json:"clock"`
+		Type             Type                 `json:"type"`
+		EntityID         uint32               `json:"entityID,omitempty"`
+		ParentID         uint32               `json:"parentID,omitempty"`
+		Controlled       *bool                `json:"controlled,omitempty"`
+		Position         *Position            `json:"position,omitempty"`
+		Created          *EntityCreate        `json:"created,omitempty"`
+		Bootstrap        *EntityBootstrap     `json:"bootstrap,omitempty"`
+		Member           *EntityMember        `json:"member,omitempty"`
+		Map              *MapState            `json:"map,omitempty"`
+		Payload          []byte               `json:"payload,omitempty"`
+		WeaponLock       *WeaponLock          `json:"weaponLock,omitempty"`
+		GunMarker        *GunMarker           `json:"gunMarker,omitempty"`
+		Camera           *Camera              `json:"camera,omitempty"`
+		NetStats         *PlayerNetStats      `json:"netStats,omitempty"`
+		Scalar           *Scalar              `json:"scalar,omitempty"`
+		Cruise           *CruiseState         `json:"cruise,omitempty"`
+		Health           *ShipHealth          `json:"health,omitempty"`
+		Death            *ShipDeath           `json:"death,omitempty"`
+		DamageDealt      *ShipDamageDealt     `json:"damageDealt,omitempty"`
+		Visibility       *SpottedEntities     `json:"visibility,omitempty"`
+		Squadron         *MinimapSquadron     `json:"squadron,omitempty"`
+		Minimap          *MinimapShipPosition `json:"minimap,omitempty"`
+		Torpedo          *TorpedoPosition     `json:"torpedo,omitempty"`
+		Shell            *ArtilleryShot       `json:"shell,omitempty"`
+		TorpedoLaunch    *TorpedoLaunch       `json:"torpedoLaunch,omitempty"`
+		TorpedoDirection *TorpedoDirection    `json:"torpedoDirection,omitempty"`
+		ProjectileHit    *ProjectileHit       `json:"projectileHit,omitempty"`
+		VictoryPoints    *VictoryPointUpdate  `json:"victoryPoints,omitempty"`
+		TeamScore        *TeamScoreUpdate     `json:"teamScore,omitempty"`
+		Results          *BattleResults       `json:"results,omitempty"`
 	}
 
 	// Timeline contains decoded events and packet types that do not yet have event decoders.
@@ -394,6 +463,17 @@ const (
 	// ShipRepairEvent identifies a verified positive vehicle health delta.
 	ShipRepairEvent Type = "ship_repair"
 
+	// ShipDeathEvent identifies the replay's authoritative vehicle death notification.
+	ShipDeathEvent Type = "ship_death"
+
+	// ShipDamageDealtEvent identifies damage attributed to an aggressor by the game server.
+	ShipDamageDealtEvent Type = "ship_damage_dealt"
+
+	// VictoryPointsEvent identifies a score total sent to the player's client.
+	VictoryPointsEvent Type = "victory_points"
+	// TeamScoreEvent identifies an authoritative BattleLogic team score update.
+	TeamScoreEvent Type = "team_score"
+
 	// ShipVisibilityEvent identifies a complete update to the replay client's spotted ships.
 	ShipVisibilityEvent Type = "ship_visibility"
 
@@ -411,6 +491,18 @@ const (
 
 	// TorpedoPositionEvent identifies an authoritative torpedo position synchronization.
 	TorpedoPositionEvent Type = "torpedo_position"
+
+	// ArtilleryShotEvent identifies a newly fired shell.
+	ArtilleryShotEvent Type = "artillery_shot"
+
+	// TorpedoLaunchEvent identifies a newly launched torpedo.
+	TorpedoLaunchEvent Type = "torpedo_launch"
+
+	// TorpedoDirectionEvent identifies an updated torpedo trajectory.
+	TorpedoDirectionEvent Type = "torpedo_direction"
+
+	// ProjectileHitEvent identifies a shell/torpedo impact or removal.
+	ProjectileHitEvent Type = "projectile_hit"
 
 	// EntityControlEvent identifies a client entity-control change.
 	EntityControlEvent Type = "entity_control"
