@@ -1,6 +1,6 @@
 # `.wowsreplay` format notes
 
-These notes describe the files inspected so far; they are observations, not a complete official specification.
+These notes document the archived implementation's earlier observations. The new Go port follows the local WoWS Toolkit `wows_replays` crate for protocol behavior; see the root README for current support.
 
 ## Container and packet stream
 

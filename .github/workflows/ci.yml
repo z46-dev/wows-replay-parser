@@ -60,11 +60,17 @@ jobs:
       - name: Check Go correctness
         run: go vet ./...
 
-      - name: Run tests
-        run: go test ./...
+      - name: Run Go tests with race detector
+        run: go test -race ./...
 
-      - name: Build packages
-        run: go build ./...
+      - name: Build all examples
+        run: |
+          for dir in ./examples/*; do
+            if [[ -d "$dir" ]]; then
+              echo "Building $dir"
+              go build "$dir"
+            fi
+          done
 
   vulnerability-scan:
     name: Vulnerability scan
@@ -83,6 +89,7 @@ jobs:
       - name: Scan Go dependencies and code
         uses: golang/govulncheck-action@v1
         with:
+          repo-checkout: false
           go-version-file: go.mod
           go-package: ./...
 
@@ -90,8 +97,7 @@ jobs:
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
 
       - name: Run Go security analysis
-        # Generated packages and media intentionally use shared-readable modes.
-        run: gosec -exclude=G115,G404,G301,G302,G306 ./...
+        run: gosec -exclude-generated ./...
 
   tag:
     name: Tag successful main build

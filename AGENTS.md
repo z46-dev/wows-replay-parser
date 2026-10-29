@@ -1,32 +1,22 @@
-# Coding Guidelines
-
-These are mandatory coding rules & guidelines for all code in this repository.
-
-## Global Coding Rules
-
-1. Lines of code is not a measure of quality. Do not write code to meet a line count requirement. Instead, focus on clean elegant solutions. Don't reuse code, spend time scanning/indexing to ensure you are not duplicating functionality. If you find yourself writing the same code twice, consider refactoring it into a shared function or module.
-2. Writing tests for the fun of it is not a good idea. Write tests for important broad things, not for every single function. If you find yourself writing a test for a function that is not important, consider if the function is even necessary.
-3. We should ensure that our entire test plan can be ran inside a GitHub Actions workflow. We can use the Go installable module nektos/act to run the workflow locally. We should run tests, code quality checks, and builds in the workflow.
-4. Do not leave dev servers running. Always terminate running processes unless asked to run one after.
-
 ## Go Coding Rules
 
 Mandatory coding guidelines for Go:
 
-1. Avoid `:=` as much as possible, only use in loops or select statements
+1. Avoid `:=` as much as possible; use it in loops, select statements, and `if` initializers for comma-ok checks as described in rule 8
 2. Use explicit type declarations for variables in blocks
-3. Use named/naked returns in functions to improve readability
+3. Name every function return value, including single-value and error returns. Assign results to the named return variables and use naked `return` statements; do not return expressions directly
 4. For all major functions, put a brief one-line comment explaining the function's purpose. If it needs more than a line, expand as needed. Do not over document
-5. Blank new lines after `}` when sensible, blank new lines to separate logical blocks of code
+5. Put one blank line between distinct logical blocks. Start the function body with a blank line after local declarations; separate guard clauses, validation steps, and subsequent work with blank lines; put a blank line before a final naked `return` when it follows result assignment
 6. For checking errors, put the function call into the if statement
-7. Use grouped `var (...)` declarations when a block needs more than one local variable
+7. Use grouped `var (...)` declarations when a block needs more than one local variable. Combine variables of the same type on one declaration line when they share an initialization context, and explicitly initialize grouped variables when values are provided
 8. For comma-ok checks, put the assignment in the if statement when the value is only needed for that branch or immediate check
-9. Avoid redundant `return` statements inside conditionals when the function can naturally fall through to its named return
+9. In a guard clause or selected branch, assign the error or result to the named return variable and use a naked `return` immediately when later code must not run. When execution should continue, assign the result and fall through to the final naked `return`
 10. Optimize for readability and performance always. Conciseness is good, but not at the expense of clarity and performance
-11. For type declarations, if applicable, create them in a `type ( ... )` block
+11. Declare each named type in its own `type Name ...` declaration. Do not group separate named types into a `type ( ... )` block
 12. When setting a value you're going to immediately check, do the assignment in the if statement
 13. Inline values used exactly once. Do not create one-use locals solely to name literals, filters, function arguments, or struct values; pass the expression directly where it is consumed. Keep a local only when the value is reused, must survive multi-step error handling, or must remain identical across multiple uses
-14. After a "thought" block, put a blank line before the next statement or block. Sure some things group well together, but a thought usually ends after a "}" or a return.
+14. When validating a string against multiple allowed values, prefer a `switch` with the allowed cases grouped and a `default` error branch over chained inequality checks
+15. When a composed string uses format placeholders, assign `fmt.Sprintf` to the named string return variable, then use a naked `return`
 
 Here's an example:
 
@@ -37,17 +27,15 @@ var (
     err error
 )
 
-type (
-    Something struct {
-        Param1, Param2 string
-        SomeInt        int
-    }
+type Something struct {
+    Param1, Param2 string
+    SomeInt        int
+}
 
-    SomethingElse struct {
-        Param1, Param2 string
-        SomeInt        int
-    }
-)
+type SomethingElse struct {
+    Param1, Param2 string
+    SomeInt        int
+}
 
 // Computes the sum of two integers, returning an error if the result is negative.
 func doSomething(a, b int) (c int, err error) {
@@ -72,7 +60,7 @@ func main() {
 }
 ```
 
-## JavaScript/TypeScript, HTML, JSON, and CSS Rules
+## JavaScript, HTML, and CSS Rules
 
 Mandatory frontend coding guidelines:
 
@@ -90,35 +78,40 @@ Mandatory frontend coding guidelines:
 12. Optimize for readability, accessibility, maintainability, and browser performance
 13. Split large CSS files into smaller tailwind layers or component-specific files when they contain unrelated responsibilities
 14. Ensure a clean structure of HTML, CSS, and JavaScript files.
-15. Use 4 indent spaces for code formatting.
-16. No trailing whitespace or commas.
-17. Format arrays/json cleanly:
+15. No trailing commas.
+16. When formatting arrays/objects on multiple lines, follow the following good guideline:
 
-```js
-// Good
-const arr = [{
-    param1: "value1",
-    param2: "value2",
-    someInt: 42
-}, {
-    param1: "value3",
-    param2: "value4",
-    someInt: 43
-}];
-
-// Bad
-const arr = [
-    {
-        param1: "value1",
-        param2: "value2",
-        someInt: 42,
-    },
-    {
-        param1: "value3",
-        param2: "value4",
-        someInt: 43,
-    }
+```javascript
+const shortArr = [1, 2, 3];
+const longArr = [
+    1,
+    2,
+    3
 ];
+
+const shortObj = { a: 1, b: 2, c: 3 };
+const longObj = {
+    a: 1,
+    b: 2,
+    c: 3
+};
+
+const complexObject = {
+    a: 1,
+    b: {
+        c: 2,
+        d: 3
+    },
+    e: 4,
+    f: [{
+        g: 5,
+        h: 6
+    }, {
+        i: 7,
+        j: 8
+    }],
+    lmnop: "asdf"
+};
 ```
 
 ## graphify

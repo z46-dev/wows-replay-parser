@@ -1,4 +1,4 @@
-// Package replayparser reads World of Warships replay containers and packet frames.
+// Package replayparser reads World of Warships replay containers and packets.
 package replayparser
 
 import (
@@ -8,77 +8,118 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
+	"os"
 
-	"github.com/z46-dev/wows-replay-parser/internal/replayformat"
 	"golang.org/x/crypto/blowfish"
 )
 
 const (
-	maxContainerBytes = 256 << 20
-	maxMetadataBytes  = 16 << 20
-	maxInflatedBytes  = 256 << 20
-	maxPacketCount    = 4_000_000
+	replayMagic      uint32 = 0x11343212
+	maxReplayBytes          = 256 << 20
+	maxMetadataBytes        = 16 << 20
+	maxPacketBytes          = 256 << 20
 )
 
-var replayKey = []byte{0x29, 0xb7, 0xc9, 0x09, 0x38, 0x3f, 0x84, 0x88, 0xfa, 0x98, 0xec, 0x4e, 0x13, 0x19, 0x79, 0xfb}
+var replayKey = [16]byte{0x29, 0xb7, 0xc9, 0x09, 0x38, 0x3f, 0x84, 0x88, 0xfa, 0x98, 0xec, 0x4e, 0x13, 0x19, 0x79, 0xfb}
 
 type (
-	// Metadata contains stable replay-header fields; Raw retains the complete header JSON.
-	Metadata struct {
-		ClientVersionFromExe string          `json:"clientVersionFromExe"`
-		ClientVersionFromXML string          `json:"clientVersionFromXml"`
-		DateTime             string          `json:"dateTime"`
-		GameType             string          `json:"gameType"`
-		MatchGroup           string          `json:"matchGroup"`
-		Scenario             string          `json:"scenario"`
-		MapDisplayName       string          `json:"mapDisplayName"`
-		MapName              string          `json:"mapName"`
-		MapID                int             `json:"mapId"`
-		PlayerName           string          `json:"playerName"`
-		PlayerVehicle        string          `json:"playerVehicle"`
-		PlayersPerTeam       int             `json:"playersPerTeam"`
-		TeamsCount           int             `json:"teamsCount"`
-		GameMode             int             `json:"gameMode"`
-		Duration             int             `json:"duration"`
-		BattleDuration       int             `json:"battleDuration"`
-		Raw                  json.RawMessage `json:"-"`
-	}
-
-	// Packet is one length-framed replay packet. Payload aliases Replay's packet buffer.
-	Packet struct {
-		Type    uint32
-		Clock   float32
-		Payload []byte
-	}
-
-	// Replay contains parsed metadata and raw packet frames for one supported client build.
+	// Replay holds metadata and the decrypted packet stream.
 	Replay struct {
-		Metadata      Metadata
-		ClientVersion string
-		PacketLayout  string
-		Packets       []Packet
+		Metadata Metadata
+		packets  []byte
+	}
+
+	// replayDecryptor implements Toolkit's Blowfish decrypt plus previous-plaintext XOR chain.
+	replayDecryptor struct {
+		input    io.Reader
+		cipher   *blowfish.Cipher
+		previous [blowfish.BlockSize]byte
+		pending  [blowfish.BlockSize]byte
+		offset   int
 	}
 )
 
-// Parse validates and decodes a complete replay container into raw packet frames.
+// Open reads and parses one complete replay file.
+func Open(path string) (replay *Replay, err error) {
+	var info os.FileInfo
+	if info, err = os.Stat(path); err != nil {
+		return
+	}
+
+	if info.Size() > maxReplayBytes {
+		err = fmt.Errorf("replay exceeds %d bytes", maxReplayBytes)
+		return
+	}
+
+	var data []byte
+	if data, err = os.ReadFile(path); err != nil {
+		return
+	}
+
+	replay, err = Parse(data)
+	return
+}
+
+// ReadMetadata reads only the plaintext replay header from a file.
+func ReadMetadata(path string) (metadata Metadata, err error) {
+	var file *os.File
+	if file, err = os.Open(path); err != nil {
+		return
+	}
+
+	defer file.Close()
+
+	var (
+		header      [12]byte
+		count, size uint32
+	)
+
+	if _, err = io.ReadFull(file, header[:]); err != nil {
+		return
+	}
+
+	if binary.LittleEndian.Uint32(header[:4]) != replayMagic {
+		err = fmt.Errorf("invalid replay magic")
+		return
+	}
+
+	if count = binary.LittleEndian.Uint32(header[4:8]); count == 0 || count > 64 {
+		err = fmt.Errorf("invalid metadata block count %d", count)
+		return
+	}
+
+	if size = binary.LittleEndian.Uint32(header[8:]); size > maxMetadataBytes {
+		err = fmt.Errorf("replay metadata exceeds %d bytes", maxMetadataBytes)
+		return
+	}
+
+	var raw []byte = make([]byte, size)
+	if _, err = io.ReadFull(file, raw); err != nil {
+		return
+	}
+
+	metadata, err = parseMetadata(raw)
+	return
+}
+
+// Parse reads Toolkit's replay wrapper and inflates its packet stream.
 func Parse(data []byte) (replay *Replay, err error) {
-	if len(data) > maxContainerBytes {
-		err = fmt.Errorf("replay is larger than %d bytes", maxContainerBytes)
+	if len(data) > maxReplayBytes {
+		err = fmt.Errorf("replay exceeds %d bytes", maxReplayBytes)
 		return
 	}
 
 	var (
-		magic, blockCount, plainSize uint32
-		metadataRaw                  []byte
+		reader     *bytes.Reader = bytes.NewReader(data)
+		magic      uint32
+		blockCount uint32
 	)
 
-	var reader *bytes.Reader = bytes.NewReader(data)
 	if err = binary.Read(reader, binary.LittleEndian, &magic); err != nil {
 		return
 	}
 
-	if magic != replayformat.Magic {
+	if magic != replayMagic {
 		err = fmt.Errorf("invalid replay magic: 0x%08x", magic)
 		return
 	}
@@ -88,190 +129,136 @@ func Parse(data []byte) (replay *Replay, err error) {
 	}
 
 	if blockCount == 0 || blockCount > 64 {
-		err = fmt.Errorf("invalid replay block count: %d", blockCount)
+		err = fmt.Errorf("invalid metadata block count %d", blockCount)
 		return
 	}
 
-	for index := uint32(0); index < blockCount; index++ {
-		var blockSize uint32
-		if err = binary.Read(reader, binary.LittleEndian, &blockSize); err != nil {
+	var metadata Metadata
+	for index := range blockCount {
+		var size uint32
+		if err = binary.Read(reader, binary.LittleEndian, &size); err != nil {
 			return
 		}
 
-		if uint64(blockSize) > uint64(reader.Len()) {
-			err = fmt.Errorf("metadata block %d exceeds remaining input", index)
+		if uint64(size) > uint64(reader.Len()) {
+			err = fmt.Errorf("metadata block %d exceeds replay", index)
 			return
 		}
 
 		if index == 0 {
-			if blockSize > maxMetadataBytes {
+			if size > maxMetadataBytes {
 				err = fmt.Errorf("replay metadata exceeds %d bytes", maxMetadataBytes)
 				return
 			}
 
-			metadataRaw = make([]byte, int(blockSize))
-			if _, err = io.ReadFull(reader, metadataRaw); err != nil {
+			var raw []byte = make([]byte, size)
+			if _, err = io.ReadFull(reader, raw); err != nil {
 				return
 			}
-		} else if _, err = io.CopyN(io.Discard, reader, int64(blockSize)); err != nil {
+
+			if metadata, err = parseMetadata(raw); err != nil {
+				return
+			}
+		} else if _, err = io.CopyN(io.Discard, reader, int64(size)); err != nil {
 			return
 		}
 	}
+
+	var (
+		plainSize      uint32
+		compressedSize uint32
+	)
 
 	if err = binary.Read(reader, binary.LittleEndian, &plainSize); err != nil {
 		return
 	}
 
-	var compressedSize uint32
 	if err = binary.Read(reader, binary.LittleEndian, &compressedSize); err != nil {
 		return
 	}
 
-	if uint64(compressedSize) != uint64(reader.Len()) {
-		err = fmt.Errorf("compressed size %d does not match remaining input %d", compressedSize, reader.Len())
-		return
-	}
-
-	if plainSize > maxInflatedBytes {
-		err = fmt.Errorf("declared packet stream exceeds %d bytes", maxInflatedBytes)
-		return
-	}
-
-	var metadata Metadata
-	if err = json.Unmarshal(metadataRaw, &metadata); err != nil {
-		err = fmt.Errorf("invalid replay metadata: %w", err)
-		return
-	}
-
-	metadata.Raw = append(json.RawMessage(nil), metadataRaw...)
-	var (
-		build replayformat.ClientBuild
-		ok    bool
-	)
-
-	if build, ok = replayformat.LookupClientBuild(metadata.ClientVersionFromExe); !ok {
-		err = fmt.Errorf("unsupported client build %q", metadata.ClientVersionFromExe)
-		return
-	}
-
-	if blockCount != build.BlockCount {
-		err = fmt.Errorf("client build %s expects %d metadata blocks, got %d", build.ClientVersion, build.BlockCount, blockCount)
+	if plainSize > maxPacketBytes || uint64(compressedSize) != uint64(reader.Len()) {
+		err = fmt.Errorf("invalid replay packet stream sizes: plain=%d compressed=%d remaining=%d", plainSize, compressedSize, reader.Len())
 		return
 	}
 
 	var packetData []byte
-	if packetData, err = decryptAndInflate(reader, int64(plainSize)); err != nil {
+	if packetData, err = inflatePackets(reader, int64(plainSize)); err != nil {
 		return
 	}
 
-	var packets []Packet
-	if packets, err = parsePackets(packetData); err != nil {
-		return
-	}
-
-	replay = &Replay{Metadata: metadata, ClientVersion: build.ClientVersion, PacketLayout: build.PacketLayout, Packets: packets}
+	replay = &Replay{Metadata: metadata, packets: packetData}
 	return
 }
 
-// decryptAndInflate applies the replay's Blowfish/XOR layer and checks the declared output size.
-func decryptAndInflate(encrypted io.Reader, expectedSize int64) (plain []byte, err error) {
-	var (
-		cipher    *blowfish.Cipher
-		cipherErr error
-	)
+// parseMetadata keeps the original JSON alongside the common typed fields.
+func parseMetadata(raw []byte) (metadata Metadata, err error) {
+	if err = json.Unmarshal(raw, &metadata); err != nil {
+		err = fmt.Errorf("invalid replay metadata: %w", err)
+		return
+	}
 
-	if cipher, cipherErr = blowfish.NewCipher(replayKey); cipherErr != nil {
-		err = cipherErr
+	metadata.Raw = append(json.RawMessage(nil), raw...)
+	return
+}
+
+// inflatePackets decrypts only as zlib asks for input and checks the declared size.
+func inflatePackets(encrypted io.Reader, expected int64) (packets []byte, err error) {
+	var cipher *blowfish.Cipher
+	if cipher, err = blowfish.NewCipher(replayKey[:]); err != nil {
 		return
 	}
 
 	var (
-		ciphertext, previous, block [blowfish.BlockSize]byte
-		decrypted                   bytes.Buffer
+		input   *replayDecryptor = &replayDecryptor{input: encrypted, cipher: cipher, offset: blowfish.BlockSize}
+		decoder io.ReadCloser
 	)
 
-	for {
-		if _, err = io.ReadFull(encrypted, ciphertext[:]); err == io.EOF {
-			err = nil
-			break
-		}
-
-		if err != nil {
-			err = fmt.Errorf("encrypted stream is not block aligned: %w", err)
-			return
-		}
-
-		cipher.Decrypt(block[:], ciphertext[:])
-		for index := range block {
-			block[index] ^= previous[index]
-		}
-
-		if _, err = decrypted.Write(block[:]); err != nil {
-			return
-		}
-
-		previous = block
-	}
-
-	var (
-		zreader io.ReadCloser
-		zerr    error
-	)
-
-	if zreader, zerr = zlib.NewReader(bytes.NewReader(decrypted.Bytes())); zerr != nil {
-		err = fmt.Errorf("open compressed packet stream: %w", zerr)
+	if decoder, err = zlib.NewReader(input); err != nil {
+		err = fmt.Errorf("open compressed packets: %w", err)
 		return
 	}
 
-	plain, err = io.ReadAll(io.LimitReader(zreader, maxInflatedBytes+1))
-	var closeErr error
-	closeErr = zreader.Close()
-	if err != nil {
+	defer decoder.Close()
+
+	if packets, err = io.ReadAll(io.LimitReader(decoder, int64(maxPacketBytes)+1)); err != nil {
 		return
 	}
 
-	if closeErr != nil {
-		err = closeErr
-		return
-	}
-
-	if int64(len(plain)) != expectedSize {
-		err = fmt.Errorf("decompressed size %d does not match declared size %d", len(plain), expectedSize)
+	if int64(len(packets)) != expected {
+		err = fmt.Errorf("packet stream size %d differs from declared %d", len(packets), expected)
 	}
 
 	return
 }
 
-// parsePackets validates all frames and retains their payload slices without copying.
-func parsePackets(data []byte) (packets []Packet, err error) {
-	for offset := 0; offset < len(data); {
-		if len(packets) == maxPacketCount {
-			err = fmt.Errorf("packet stream exceeds %d packets", maxPacketCount)
-			return
+// Read produces plaintext bytes from complete encrypted Blowfish blocks.
+func (reader *replayDecryptor) Read(output []byte) (n int, err error) {
+	for len(output) > 0 {
+		if reader.offset == blowfish.BlockSize {
+			var encrypted [blowfish.BlockSize]byte
+			if _, err = io.ReadFull(reader.input, encrypted[:]); err != nil {
+				if err == io.EOF && n > 0 {
+					err = nil
+				}
+
+				return
+			}
+
+			reader.cipher.Decrypt(reader.pending[:], encrypted[:])
+			for index := range reader.pending {
+				reader.pending[index] ^= reader.previous[index]
+			}
+
+			reader.previous = reader.pending
+			reader.offset = 0
 		}
 
-		if len(data)-offset < 12 {
-			err = fmt.Errorf("truncated packet header at offset %d", offset)
-			return
-		}
+		var copied int = copy(output, reader.pending[reader.offset:])
 
-		var (
-			payloadSize uint32 = binary.LittleEndian.Uint32(data[offset : offset+4])
-			end         uint64 = uint64(offset) + 12 + uint64(payloadSize)
-		)
-
-		if end > uint64(len(data)) {
-			err = fmt.Errorf("packet at offset %d exceeds packet stream", offset)
-			return
-		}
-
-		packets = append(packets, Packet{
-			Type:    binary.LittleEndian.Uint32(data[offset+4 : offset+8]),
-			Clock:   math.Float32frombits(binary.LittleEndian.Uint32(data[offset+8 : offset+12])),
-			Payload: data[offset+12 : int(end)],
-		})
-
-		offset = int(end)
+		n += copied
+		reader.offset += copied
+		output = output[copied:]
 	}
 
 	return

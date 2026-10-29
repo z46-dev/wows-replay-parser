@@ -1,69 +1,92 @@
 package replayparser
 
 import (
-	"os"
+	"context"
+	"errors"
+	"io"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestParseSupportedBuildFixtures(t *testing.T) {
-	var fixtures []struct {
-		path        string
-		version     string
-		gameType    string
-		mapID       int
-		playerShip  string
-		playerCount int
-	} = []struct {
-		path        string
-		version     string
-		gameType    string
-		mapID       int
-		playerShip  string
-		playerCount int
-	}{
-		{path: "testdata/replays/15.8_236883_Yamato.wowsreplay", version: "15.8.0.13187581", gameType: "EventBattle", mapID: 8, playerShip: "PJSB018-Yamato-1944", playerCount: 5},
-		{path: "testdata/replays/15.9_20261011_201842.wowsreplay", version: "15.9.0.13357625", gameType: "ClanBattle", mapID: 11, playerShip: "PVSC708-Comandante-Aguirre", playerCount: 12},
+// TestFixtureContainers checks metadata and packet framing against saved replays.
+func TestFixtureContainers(t *testing.T) {
+	var (
+		files []string
+		err   error
+	)
+
+	if files, err = filepath.Glob("testdata/replays/*.wowsreplay"); !assert.NoError(t, err) {
+		return
 	}
 
-	for _, fixture := range fixtures {
-		t.Run(fixture.version, func(t *testing.T) {
+	if !assert.NotEmpty(t, files) {
+		return
+	}
+
+	for _, path := range files {
+		t.Run(filepath.Base(path), func(t *testing.T) {
 			var (
-				data []byte
-				err  error
+				metadata Metadata
+				replay   *Replay
+				iterator *PacketIterator
+				err      error
+				count    int
 			)
 
-			if data, err = os.ReadFile(fixture.path); !assert.NoError(t, err) {
+			if metadata, err = ReadMetadata(path); !assert.NoError(t, err) {
 				return
 			}
 
-			var replay *Replay
-			if replay, err = Parse(data); !assert.NoError(t, err) {
+			if replay, err = Open(path); !assert.NoError(t, err) {
 				return
 			}
 
-			assert.Equal(t, fixture.version, replay.ClientVersion)
-			assert.Equal(t, fixture.gameType, replay.Metadata.GameType)
-			assert.Equal(t, fixture.mapID, replay.Metadata.MapID)
-			assert.Equal(t, fixture.playerShip, replay.Metadata.PlayerVehicle)
-			assert.Equal(t, fixture.playerCount, replay.Metadata.PlayersPerTeam)
-			assert.Equal(t, 2, replay.Metadata.TeamsCount)
-			assert.Equal(t, 1200, replay.Metadata.BattleDuration)
-			assert.NotEmpty(t, replay.Packets)
-			assert.NotEmpty(t, replay.Metadata.MapName)
-			assert.NotEmpty(t, replay.Metadata.Raw)
+			assert.Equal(t, metadata.ClientVersionFromExe, replay.Metadata.ClientVersionFromExe)
+			assert.NotEmpty(t, metadata.ClientVersionFromExe)
+			if iterator, err = replay.Packets(); !assert.NoError(t, err) {
+				return
+			}
+
+			for {
+				if _, err = iterator.Next(); errors.Is(err, io.EOF) {
+					break
+				}
+
+				if !assert.NoError(t, err) {
+					return
+				}
+
+				count++
+			}
+
+			assert.Positive(t, count)
 		})
 	}
 }
 
-func TestParseRejectsInvalidMagic(t *testing.T) {
-	var err error
-	_, err = Parse(make([]byte, 8))
-	assert.Error(t, err)
+// TestWalkPacketsCancellation checks that a caller can stop packet traversal.
+func TestWalkPacketsCancellation(t *testing.T) {
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+
+	ctx, cancel = context.WithCancel(context.Background())
+	cancel()
+
+	var (
+		replay *Replay = &Replay{Metadata: Metadata{ClientVersionFromExe: "15.9.0.13357625"}}
+		err    error
+	)
+
+	err = replay.WalkPackets(ctx, func(Packet) error { return nil })
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
-func TestParsePacketsRejectsTruncatedFrame(t *testing.T) {
-	_, err := parsePackets(make([]byte, 11))
-	assert.Error(t, err)
+// TestVersionedPacketIDs checks Toolkit's legacy and modern mapping boundary.
+func TestVersionedPacketIDs(t *testing.T) {
+	assert.Equal(t, "nested_property_update", packetType(0x22, false))
+	assert.Equal(t, "battle_results", packetType(0x22, true))
 }

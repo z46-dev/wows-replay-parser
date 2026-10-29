@@ -1,152 +1,176 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
+	"sort"
 
 	"github.com/alexflint/go-arg"
+	"github.com/z46-dev/golog"
+	wowsextractor "github.com/z46-dev/wows-extractor"
 	replayparser "github.com/z46-dev/wows-replay-parser"
-	"github.com/z46-dev/wows-replay-parser/video"
 )
 
-const maxReplayFileSize int64 = 256 << 20
+type (
+	inspectCommand struct {
+		Replay string `arg:"positional,required" help:"Replay file"`
+		JSON   bool   `arg:"--json,-j" help:"Print metadata as JSON"`
+	}
 
-type arguments struct {
-	ReplayPath         string  `arg:"positional,required" placeholder:"REPLAY" help:"Path to a .wowsreplay file"`
-	EventsJSON         bool    `arg:"--events-json" help:"Write decoded events as JSON instead of the replay summary"`
-	GameData           string  `arg:"--gamedata" placeholder:"PATH" help:"wows-extractor ZIP matching this replay's client version"`
-	ExportFrame        string  `arg:"--export-frame" placeholder:"PATH" help:"Export one rendered PNG frame instead of printing the replay summary"`
-	ExportVideo        string  `arg:"--export-video" placeholder:"PATH" help:"Export a headless MP4 replay video using FFmpeg"`
-	FontPath           string  `arg:"--font" placeholder:"PATH" help:"Optional TTF/OTF font file for frame export"`
-	At                 float64 `arg:"--at" placeholder:"SECONDS" default:"0" help:"Replay clock time to render with --export-frame"`
-	VideoFPS           int     `arg:"--video-fps" default:"30" help:"Video frame rate (1-60)"`
-	VideoSpeed         float64 `arg:"--video-speed" default:"20" help:"Replay speed multiplier for video export"`
-	VideoCRF           int     `arg:"--video-crf" default:"20" help:"H.264 quality (16-35; lower is larger and sharper)"`
-	VideoScale         float64 `arg:"--video-scale" default:"1" help:"Scale the complete video layout to control output quality (0.5-2.7)"`
-	VideoWorkers       int     `arg:"--video-workers" default:"0" help:"Parallel frame-render workers (0=automatic; otherwise no arbitrary limit)"`
-	FFmpegPath         string  `arg:"--ffmpeg" default:"ffmpeg" placeholder:"PATH" help:"FFmpeg executable used for video export"`
-	AllowVersionMixing bool    `arg:"--allow-version-mixing" help:"Use replay data from another client version; resolved member names may be incorrect"`
+	packetsCommand struct {
+		Replay   string `arg:"positional,required" help:"Replay file"`
+		GameData string `arg:"--gamedata,-g" help:"Opened extractor archive to verify against the replay"`
+		JSON     bool   `arg:"--json,-j" help:"Print packet counts as JSON"`
+	}
+
+	arguments struct {
+		Inspect *inspectCommand `arg:"subcommand:inspect"`
+		Packets *packetsCommand `arg:"subcommand:packets"`
+	}
+
+	packetSummary struct {
+		Metadata replayparser.Metadata `json:"metadata"`
+		Total    int                   `json:"total"`
+		ByType   map[string]int        `json:"byType"`
+	}
+)
+
+// Helpful error reporting function that prints to stderr and exits with a non-zero status code.
+func errorf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
+	os.Exit(1)
 }
 
-// Description explains the replay inspection command.
-func (arguments) Description() string {
-	return "Parse a World of Warships replay and print the information currently supported."
-}
-
-// main parses command arguments and reports errors with a nonzero exit status.
+// main parses the command and reports a single actionable error.
 func main() {
 	var (
-		args arguments
-		err  error
+		args   arguments
+		parser *arg.Parser
+		err    error
 	)
 
-	arg.MustParse(&args)
-	if err = inspectReplay(args); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	if parser = arg.MustParse(&args); parser.Subcommand() == nil {
+		parser.Fail("missing subcommand")
+	}
+
+	if err = run(args, os.Stdout); err != nil {
+		errorf("%v", err)
 	}
 }
 
-// inspectReplay parses a replay and dispatches the requested summary, JSON, frame, or video output.
-func inspectReplay(args arguments) (err error) {
-	var outputModes int
-	if args.EventsJSON {
-		outputModes++
+func run(arguments arguments, output io.Writer) (err error) {
+	switch {
+	case arguments.Inspect != nil:
+		err = runInspect(arguments, output)
+	case arguments.Packets != nil:
+		err = runPackets(arguments, output)
+	default:
+		err = fmt.Errorf("no subcommand provided")
 	}
 
-	if args.ExportFrame != "" {
-		outputModes++
-	}
+	return
+}
 
-	if args.ExportVideo != "" {
-		outputModes++
-	}
+func runInspect(args arguments, output io.Writer) (err error) {
+	var (
+		metadata replayparser.Metadata
+	)
 
-	if outputModes > 1 {
-		err = fmt.Errorf("--events-json, --export-frame, and --export-video are mutually exclusive")
+	if metadata, err = replayparser.ReadMetadata(args.Inspect.Replay); err != nil {
+		err = fmt.Errorf("failed to read metadata: %v", err)
 		return
 	}
 
-	if args.AllowVersionMixing && ((!args.EventsJSON && args.ExportFrame == "" && args.ExportVideo == "") || args.GameData == "") {
-		err = fmt.Errorf("--allow-version-mixing requires an export mode and --gamedata")
+	if args.Inspect.JSON {
+		err = json.NewEncoder(os.Stdout).Encode(metadata)
+	} else {
+		fmt.Fprintf(output, "%s | %s | %s | %s\n", metadata.ClientVersionFromExe, metadata.DateTime, metadata.MapDisplayName, metadata.PlayerName)
+	}
+
+	return
+}
+
+func runPackets(args arguments, output io.Writer) (err error) {
+	var (
+		replay  *replayparser.Replay
+		archive *wowsextractor.Archive
+		data    *replayparser.GameData
+	)
+
+	if replay, err = loadReplay(args.Packets.Replay, !args.Packets.JSON); err != nil {
+		err = fmt.Errorf("failed to load replay: %v", err)
 		return
 	}
 
-	if (args.ExportFrame != "" || args.ExportVideo != "") && args.GameData == "" {
-		err = fmt.Errorf("--export-frame and --export-video require --gamedata")
-		return
-	}
-
-	if args.VideoWorkers < 0 {
-		err = fmt.Errorf("--video-workers must not be negative")
-		return
-	}
-
-	if args.At < 0 || math.IsNaN(args.At) || math.IsInf(args.At, 0) {
-		err = fmt.Errorf("--at must be finite and not negative")
-		return
-	}
-
-	var file *os.File
-	if file, err = os.Open(args.ReplayPath); err != nil {
-		return
-	}
-
-	defer file.Close()
-
-	var data []byte
-	if data, err = io.ReadAll(io.LimitReader(file, maxReplayFileSize+1)); err != nil {
-		return
-	}
-
-	if int64(len(data)) > maxReplayFileSize {
-		err = fmt.Errorf("replay exceeds the %d-byte safety limit", maxReplayFileSize)
-		return
-	}
-
-	var replay *replayparser.Replay
-	if replay, err = replayparser.Parse(data); err != nil {
-		return
-	}
-
-	var schema *video.ReplaySchema
-	if args.GameData != "" {
-		if schema, err = video.LoadReplaySchema(args.GameData, replay.ClientVersion, args.AllowVersionMixing); err != nil {
+	if args.Packets.GameData != "" {
+		if archive, err = wowsextractor.Load(args.Packets.GameData); err != nil {
+			err = fmt.Errorf("failed to load game data: %v", err)
 			return
 		}
 
-		if schema.ClientVersion != replay.ClientVersion {
-			fmt.Fprintf(os.Stderr, "warning: using %s replay data for %s replay; resolved member names may be incorrect\n", schema.ClientVersion, replay.ClientVersion)
+		defer archive.Close()
+		if data, err = replayparser.NewGameData(archive); err != nil {
+			err = fmt.Errorf("failed to create game data: %v", err)
+			return
+		}
+
+		if err = data.ValidateVersion(replay); err != nil {
+			err = fmt.Errorf("game data version mismatch: %v", err)
+			return
 		}
 	}
 
-	var timeline *video.Timeline
-	if timeline, err = video.DecodeReplayWithSchema(replay, schema); err != nil {
+	var summary packetSummary = packetSummary{Metadata: replay.Metadata, ByType: make(map[string]int)}
+	if err = replay.WalkPackets(context.Background(), func(packet replayparser.Packet) (err error) {
+		summary.Total++
+		summary.ByType[packet.Type]++
+		return
+	}); err != nil {
+		err = fmt.Errorf("failed to walk packets: %v", err)
 		return
 	}
 
-	var duration int = replay.Metadata.Duration
-	for _, event := range timeline.Events {
-		if event.Results != nil && event.Results.Summary != nil && event.Results.Summary.Common.Duration > 0 {
-			duration = int(event.Results.Summary.Common.Duration)
-			break
+	if args.Packets.JSON {
+		if err = json.NewEncoder(os.Stdout).Encode(summary); err != nil {
+			err = fmt.Errorf("failed to encode JSON: %v", err)
+			return
+		}
+
+		return
+	}
+
+	fmt.Fprintf(output, "%s: %d packets\n", summary.Metadata.ClientVersionFromExe, summary.Total)
+
+	var names []string = make([]string, 0, len(summary.ByType))
+	for name := range summary.ByType {
+		names = append(names, name)
+	}
+
+	sort.Strings(names)
+	for _, name := range names {
+		fmt.Fprintf(output, "%-26s %d\n", name, summary.ByType[name])
+	}
+
+	return
+}
+
+// loadReplay shows a terminal spinner while reading large replay files.
+func loadReplay(path string, progress bool) (replay *replayparser.Replay, err error) {
+	var spinner *golog.Spinner
+	if progress {
+		var info os.FileInfo
+		if info, err = os.Stdout.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+			spinner = golog.New().Spinner("Reading replay...", golog.SpinnerRunner, 8).Start()
 		}
 	}
-	fmt.Printf("Replay: %s\nClient version: %s\nRecorded at: %s\nPlayer: %s\nShip: %s\nMap: %s (%s, ID %d)\nBattle: %s / %s / %s (mode %d)\nTeams: %d x %d players\nDuration: %d seconds (battle limit %d seconds)\nPackets: %d\n", args.ReplayPath, replay.ClientVersion, replay.Metadata.DateTime, replay.Metadata.PlayerName, replay.Metadata.PlayerVehicle, replay.Metadata.MapDisplayName, replay.Metadata.MapName, replay.Metadata.MapID, replay.Metadata.GameType, replay.Metadata.MatchGroup, replay.Metadata.Scenario, replay.Metadata.GameMode, replay.Metadata.TeamsCount, replay.Metadata.PlayersPerTeam, duration, replay.Metadata.BattleDuration, len(replay.Packets))
 
-	if args.ExportFrame != "" {
-		return exportReplayFrame(args, replay, timeline, schema)
+	if spinner != nil {
+		defer spinner.Stop()
 	}
 
-	if args.ExportVideo != "" {
-		return exportReplayVideo(args, replay, timeline, schema)
-	}
-
-	if args.EventsJSON {
-		err = json.NewEncoder(os.Stdout).Encode(timeline)
-	}
+	replay, err = replayparser.Open(path)
 	return
 }
