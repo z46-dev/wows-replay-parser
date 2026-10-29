@@ -6,9 +6,11 @@ import (
 	"compress/zlib"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"golang.org/x/crypto/blowfish"
 )
@@ -22,27 +24,35 @@ const (
 
 var replayKey = [16]byte{0x29, 0xb7, 0xc9, 0x09, 0x38, 0x3f, 0x84, 0x88, 0xfa, 0x98, 0xec, 0x4e, 0x13, 0x19, 0x79, 0xfb}
 
-type (
-	// Replay holds metadata and the decrypted packet stream.
-	Replay struct {
-		Metadata Metadata
-		packets  []byte
-	}
+// Replay holds metadata and the decrypted packet stream.
+type Replay struct {
+	Metadata Metadata
+	packets  []byte
+}
 
-	// replayDecryptor implements Toolkit's Blowfish decrypt plus previous-plaintext XOR chain.
-	replayDecryptor struct {
-		input    io.Reader
-		cipher   *blowfish.Cipher
-		previous [blowfish.BlockSize]byte
-		pending  [blowfish.BlockSize]byte
-		offset   int
-	}
-)
+// replayDecryptor implements Toolkit's Blowfish decrypt plus previous-plaintext XOR chain.
+type replayDecryptor struct {
+	input    io.Reader
+	cipher   *blowfish.Cipher
+	previous [blowfish.BlockSize]byte
+	pending  [blowfish.BlockSize]byte
+	offset   int
+}
 
 // Open reads and parses one complete replay file.
 func Open(path string) (replay *Replay, err error) {
-	var info os.FileInfo
-	if info, err = os.Stat(path); err != nil {
+	var (
+		file *os.File
+		info os.FileInfo
+		data []byte
+	)
+
+	if file, err = openReplay(path); err != nil {
+		return
+	}
+	defer file.Close()
+
+	if info, err = file.Stat(); err != nil {
 		return
 	}
 
@@ -51,8 +61,7 @@ func Open(path string) (replay *Replay, err error) {
 		return
 	}
 
-	var data []byte
-	if data, err = os.ReadFile(path); err != nil {
+	if data, err = io.ReadAll(io.LimitReader(file, maxReplayBytes+1)); err != nil {
 		return
 	}
 
@@ -63,7 +72,8 @@ func Open(path string) (replay *Replay, err error) {
 // ReadMetadata reads only the plaintext replay header from a file.
 func ReadMetadata(path string) (metadata Metadata, err error) {
 	var file *os.File
-	if file, err = os.Open(path); err != nil {
+
+	if file, err = openReplay(path); err != nil {
 		return
 	}
 
@@ -99,6 +109,27 @@ func ReadMetadata(path string) (metadata Metadata, err error) {
 	}
 
 	metadata, err = parseMetadata(raw)
+	return
+}
+
+// openReplay opens a caller-selected file within its parent directory.
+func openReplay(path string) (file *os.File, err error) {
+	var root *os.Root
+
+	if root, err = os.OpenRoot(filepath.Dir(path)); err != nil {
+		return
+	}
+
+	if file, err = root.Open(filepath.Base(path)); err != nil {
+		err = errors.Join(err, root.Close())
+		return
+	}
+
+	if err = root.Close(); err != nil {
+		err = errors.Join(err, file.Close())
+		file = nil
+	}
+
 	return
 }
 
@@ -140,7 +171,7 @@ func Parse(data []byte) (replay *Replay, err error) {
 			return
 		}
 
-		if uint64(size) > uint64(reader.Len()) {
+		if int64(size) > int64(reader.Len()) {
 			err = fmt.Errorf("metadata block %d exceeds replay", index)
 			return
 		}
@@ -177,7 +208,7 @@ func Parse(data []byte) (replay *Replay, err error) {
 		return
 	}
 
-	if plainSize > maxPacketBytes || uint64(compressedSize) != uint64(reader.Len()) {
+	if plainSize > maxPacketBytes || int64(compressedSize) != int64(reader.Len()) {
 		err = fmt.Errorf("invalid replay packet stream sizes: plain=%d compressed=%d remaining=%d", plainSize, compressedSize, reader.Len())
 		return
 	}

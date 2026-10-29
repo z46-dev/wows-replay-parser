@@ -20,7 +20,7 @@ func TestCommandsUseLibrary(t *testing.T) {
 	if err = run(arguments{Inspect: &inspectCommand{Replay: path, JSON: true}}, &output); !assert.NoError(t, err) {
 		return
 	}
-
+``
 	var metadata map[string]any
 	if err = json.Unmarshal(output.Bytes(), &metadata); !assert.NoError(t, err) {
 		return

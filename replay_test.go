@@ -2,6 +2,7 @@ package replayparser
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"path/filepath"
@@ -89,4 +90,17 @@ func TestWalkPacketsCancellation(t *testing.T) {
 func TestVersionedPacketIDs(t *testing.T) {
 	assert.Equal(t, "nested_property_update", packetType(0x22, false))
 	assert.Equal(t, "battle_results", packetType(0x22, true))
+}
+
+// TestPacketIteratorRejectsOversizedPayload checks the untrusted length boundary.
+func TestPacketIteratorRejectsOversizedPayload(t *testing.T) {
+	var data []byte = make([]byte, 12)
+	binary.LittleEndian.PutUint32(data, ^uint32(0))
+	var iterator *PacketIterator = &PacketIterator{data: data}
+	var err error
+
+	_, err = iterator.Next()
+	assert.Error(t, err)
+	_, err = iterator.Next()
+	assert.ErrorIs(t, err, io.EOF)
 }

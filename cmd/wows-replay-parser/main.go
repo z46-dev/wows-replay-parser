@@ -85,9 +85,9 @@ func runInspect(args arguments, output io.Writer) (err error) {
 	}
 
 	if args.Inspect.JSON {
-		err = json.NewEncoder(os.Stdout).Encode(metadata)
+		err = json.NewEncoder(output).Encode(metadata)
 	} else {
-		fmt.Fprintf(output, "%s | %s | %s | %s\n", metadata.ClientVersionFromExe, metadata.DateTime, metadata.MapDisplayName, metadata.PlayerName)
+		_, err = fmt.Fprintf(output, "%s | %s | %s | %s\n", metadata.ClientVersionFromExe, metadata.DateTime, metadata.MapDisplayName, metadata.PlayerName)
 	}
 
 	return
@@ -134,7 +134,7 @@ func runPackets(args arguments, output io.Writer) (err error) {
 	}
 
 	if args.Packets.JSON {
-		if err = json.NewEncoder(os.Stdout).Encode(summary); err != nil {
+		if err = json.NewEncoder(output).Encode(summary); err != nil {
 			err = fmt.Errorf("failed to encode JSON: %v", err)
 			return
 		}
@@ -142,7 +142,9 @@ func runPackets(args arguments, output io.Writer) (err error) {
 		return
 	}
 
-	fmt.Fprintf(output, "%s: %d packets\n", summary.Metadata.ClientVersionFromExe, summary.Total)
+	if _, err = fmt.Fprintf(output, "%s: %d packets\n", summary.Metadata.ClientVersionFromExe, summary.Total); err != nil {
+		return
+	}
 
 	var names []string = make([]string, 0, len(summary.ByType))
 	for name := range summary.ByType {
@@ -151,7 +153,9 @@ func runPackets(args arguments, output io.Writer) (err error) {
 
 	sort.Strings(names)
 	for _, name := range names {
-		fmt.Fprintf(output, "%-26s %d\n", name, summary.ByType[name])
+		if _, err = fmt.Fprintf(output, "%-26s %d\n", name, summary.ByType[name]); err != nil {
+			return
+		}
 	}
 
 	return

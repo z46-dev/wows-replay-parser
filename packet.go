@@ -9,23 +9,21 @@ import (
 	"strings"
 )
 
-type (
-	// Packet is one replay frame; Payload borrows storage owned by Replay.
-	Packet struct {
-		ID      uint32  `json:"id"`
-		Type    string  `json:"type"`
-		Clock   float32 `json:"clock"`
-		Payload []byte  `json:"payload"`
-	}
+// Packet is one replay frame; Payload borrows storage owned by Replay.
+type Packet struct {
+	ID      uint32  `json:"id"`
+	Type    string  `json:"type"`
+	Clock   float32 `json:"clock"`
+	Payload []byte  `json:"payload"`
+}
 
-	// PacketIterator walks packet headers without copying payloads.
-	PacketIterator struct {
-		data   []byte
-		offset int
-		modern bool
-		failed bool
-	}
-)
+// PacketIterator walks packet headers without copying payloads.
+type PacketIterator struct {
+	data   []byte
+	offset int
+	modern bool
+	failed bool
+}
 
 // Packets returns a fresh iterator over this replay's decrypted packet stream.
 func (replay *Replay) Packets() (iterator *PacketIterator, err error) {
@@ -74,21 +72,22 @@ func (iterator *PacketIterator) Next() (packet Packet, err error) {
 	}
 
 	var (
-		size uint32 = binary.LittleEndian.Uint32(iterator.data[iterator.offset:])
-		end  uint64 = uint64(iterator.offset) + 12 + uint64(size)
+		data []byte = iterator.data[iterator.offset:]
+		size int    = int(data[0]) | int(data[1])<<8 | int(data[2])<<16 | int(data[3])<<24
 	)
 
-	if end > uint64(len(iterator.data)) {
+	if size < 0 || size > len(data)-12 {
 		err = fmt.Errorf("packet at offset %d exceeds stream", iterator.offset)
 		iterator.failed = true
 		return
 	}
 
+	var end int = iterator.offset + 12 + size
 	packet.ID = binary.LittleEndian.Uint32(iterator.data[iterator.offset+4:])
 	packet.Type = packetType(packet.ID, iterator.modern)
 	packet.Clock = math.Float32frombits(binary.LittleEndian.Uint32(iterator.data[iterator.offset+8:]))
-	packet.Payload = iterator.data[iterator.offset+12 : int(end)]
-	iterator.offset = int(end)
+	packet.Payload = iterator.data[iterator.offset+12 : end]
+	iterator.offset = end
 	return
 }
 

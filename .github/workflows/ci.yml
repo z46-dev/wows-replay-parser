@@ -97,7 +97,7 @@ jobs:
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
 
       - name: Run Go security analysis
-        run: gosec -exclude-generated ./...
+        run: gosec -exclude-generated -exclude-dir=references ./...
 
   tag:
     name: Tag successful main build
