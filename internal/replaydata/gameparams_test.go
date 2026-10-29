@@ -14,7 +14,7 @@ func TestParseVehicles(t *testing.T) {
 	)
 
 	if vehicles, err = ParseVehicles(strings.NewReader(`{
-		"PVSC708_Comandante_Aguirre": {"id": 3552490832, "index": "PVSC708", "name": "PVSC708_Comandante_Aguirre", "species": "Cruiser", "typeinfo": {"type": "Ship"}},
+		"PVSC708_Comandante_Aguirre": {"id": 3552490832, "index": "PVSC708", "name": "PVSC708_Comandante_Aguirre", "typeinfo": {"type": "Ship", "species": "Cruiser"}},
 		"PAAB001_Douglas_TBD": {"id": 42, "index": "PAAB001", "name": "PAAB001_Douglas_TBD", "typeinfo": {"type": "Aircraft"}},
 		"non-object": []
 	}`), map[string]string{"IDS_PVSC708": "C. Aguirre", "IDS_PVSC708_FULL": "Comandante Aguirre"}); err != nil {

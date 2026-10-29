@@ -1,12 +1,47 @@
 package replaydata
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
 	"strings"
+
+	wowsextractor "github.com/z46-dev/wows-extractor"
 )
+
+// gameParamsJSON adapts extractor entries to the existing catalog readers.
+func gameParamsJSON(params *wowsextractor.GameParams) (data []byte, err error) {
+	var buffer bytes.Buffer
+	buffer.WriteByte('{')
+	for index, name := range params.Query("") {
+		if index > 0 {
+			buffer.WriteByte(',')
+		}
+
+		var (
+			key   []byte
+			value json.RawMessage
+		)
+
+		if key, err = json.Marshal(name); err != nil {
+			return
+		}
+
+		if value, err = params.Get(name); err != nil {
+			return
+		}
+
+		buffer.Write(key)
+		buffer.WriteByte(':')
+		buffer.Write(value)
+	}
+
+	buffer.WriteByte('}')
+	data = buffer.Bytes()
+	return
+}
 
 // Vehicle identifies a ship in the version-specific GameParams catalog.
 type (
@@ -23,10 +58,12 @@ type (
 	}
 
 	gameParamVehicle struct {
-		ID      json.RawMessage `json:"id"`
-		Index   string          `json:"index"`
-		Name    string          `json:"name"`
-		Species string          `json:"species"`
+		ID       json.RawMessage `json:"id"`
+		Index    string          `json:"index"`
+		Name     string          `json:"name"`
+		TypeInfo struct {
+			Species string `json:"species"`
+		} `json:"typeinfo"`
 	}
 
 	gameParamTypeInfo struct {
@@ -250,7 +287,7 @@ func ParseVehicles(reader io.Reader, localizedNames map[string]string) (vehicles
 			}
 		}
 
-		vehicles = append(vehicles, Vehicle{ID: vehicleID, ShipID: item.Index, ShipName: shipName, Species: item.Species})
+		vehicles = append(vehicles, Vehicle{ID: vehicleID, ShipID: item.Index, ShipName: shipName, Species: item.TypeInfo.Species})
 		seenIDs[vehicleID] = true
 	}
 

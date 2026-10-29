@@ -3,8 +3,8 @@ package video
 import (
 	"encoding/xml"
 	"fmt"
+	"io/fs"
 	"math"
-	"os"
 )
 
 type spaceSettings struct {
@@ -24,10 +24,10 @@ type spaceSettings struct {
 	} `xml:"terrain"`
 }
 
-// LoadWorldBounds converts a game's space.settings map bounds into world coordinates.
-func LoadWorldBounds(path string) (bounds Bounds, err error) {
+// LoadWorldBounds converts archived space.settings bounds into world coordinates.
+func LoadWorldBounds(archive fs.FS, name string) (bounds Bounds, err error) {
 	var data []byte
-	if data, err = os.ReadFile(path); err != nil { // #nosec G304 -- the caller selects the game-data map path.
+	if data, err = fs.ReadFile(archive, name); err != nil {
 		return
 	}
 

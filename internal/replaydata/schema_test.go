@@ -1,9 +1,10 @@
 package replaydata
 
 import (
+	"archive/zip"
 	"encoding/binary"
-	"encoding/json"
 	"encoding/xml"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -49,20 +50,15 @@ func TestReadEntityUsesVariableLengthHeaderText(t *testing.T) {
 	}
 
 	var (
-		root       *os.Root
-		err        error
 		methods    []method
 		properties []property
 	)
-	if root, err = os.OpenRoot(t.TempDir()); err != nil {
-		t.Fatalf("os.OpenRoot() error = %v", err)
-	}
-	defer root.Close()
 
 	var schema *Schema = &Schema{}
-	if err = schema.readEntity(root, "", entity, make(map[string]bool), &properties, &methods, nil); err != nil {
+	if err := schema.readEntity(os.DirFS(t.TempDir()), "", entity, make(map[string]bool), &properties, &methods, nil); err != nil {
 		t.Fatalf("readEntity() error = %v", err)
 	}
+
 	if len(methods) != 2 || methods[0].Size != 65537 || methods[1].Size != 65536 {
 		t.Fatalf("method sort sizes = %+v, want 65537 then 65536", methods)
 	}
@@ -92,27 +88,38 @@ func TestDecodeInitialStateReadsVehicleScalars(t *testing.T) {
 	}
 }
 
-// TestLoadRejectsManifestPathsOutsidePackage prevents a manifest from reading outside its package.
-func TestLoadRejectsManifestPathsOutsidePackage(t *testing.T) {
+// TestLoadRejectsMismatchedArchiveVersion checks the replay build gate before decoding game data.
+func TestLoadRejectsMismatchedArchiveVersion(t *testing.T) {
 	var (
-		directory string = t.TempDir()
-		manifest  []byte
-		err       error
+		archivePath    string = filepath.Join(t.TempDir(), "game.zip")
+		archive        *os.File
+		writer         *zip.Writer
+		manifestWriter io.Writer
+		err            error
 	)
 
-	if manifest, err = json.Marshal(Manifest{
-		FormatVersion: 1,
-		ClientVersion: "15.9",
-		Files:         map[string]string{"../outside.json": "unused"},
-	}); err != nil {
+	if archive, err = os.Create(archivePath); err != nil {
 		t.Fatal(err)
 	}
 
-	if err = os.WriteFile(filepath.Join(directory, "manifest.json"), manifest, 0o600); err != nil {
+	writer = zip.NewWriter(archive)
+	if manifestWriter, err = writer.Create(".wows-extractor/manifest.json"); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err = Load(directory, "15.9", false); err == nil {
-		t.Fatal("Load() accepted a manifest path outside the package")
+	if _, err = manifestWriter.Write([]byte(`{"formatVersion":2,"build":"13357625","clientVersion":"15.9.0.13357625"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = Load(archivePath, "15.8.0.13187581", false); err == nil {
+		t.Fatal("Load() accepted a different client version")
 	}
 }

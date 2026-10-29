@@ -1,27 +1,21 @@
 package replaydata
 
 import (
-	"crypto/sha256"
+	"bytes"
 	"encoding/binary"
-	"encoding/hex"
-	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io/fs"
 	"math"
-	"os"
-	"path/filepath"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
+
+	wowsextractor "github.com/z46-dev/wows-extractor"
 )
 
 type (
-	Manifest struct {
-		FormatVersion int               `json:"formatVersion"`
-		ClientVersion string            `json:"clientVersion"`
-		Files         map[string]string `json:"files"`
-	}
-
 	Schema struct {
 		ClientVersion   string
 		entities        map[uint16]string
@@ -60,70 +54,32 @@ var primitiveSizes = map[string]int{
 	"UINT64": 8, "FLOAT64": 8, "VECTOR2": 8, "VECTOR3": 12,
 }
 
-// Load validates an extracted replay-data package and builds its wire-index tables.
-func Load(directory string, clientVersion string, allowVersionMixing bool) (schema *Schema, err error) {
-	var root *os.Root
-	if root, err = os.OpenRoot(directory); err != nil {
-		return
-	}
-	defer root.Close()
-
-	var data []byte
-	if data, err = root.ReadFile("manifest.json"); err != nil {
+// Load reads a versioned game archive and builds its replay wire-index tables.
+func Load(archivePath string, clientVersion string, allowVersionMixing bool) (schema *Schema, err error) {
+	var archive *wowsextractor.Archive
+	if archive, err = wowsextractor.Load(archivePath); err != nil {
 		return
 	}
 
-	var manifest Manifest
-	if err = json.Unmarshal(data, &manifest); err != nil {
-		err = fmt.Errorf("decode replay-data manifest: %w", err)
+	defer archive.Close()
+
+	if !allowVersionMixing && ((archive.Manifest.ClientVersion != "" && archive.Manifest.ClientVersion != clientVersion) ||
+		(archive.Manifest.ClientVersion == "" && !strings.HasSuffix(clientVersion, "."+archive.Manifest.Build))) {
+		err = fmt.Errorf("game archive is for build %s (%s), replay is %s", archive.Manifest.Build, archive.Manifest.ClientVersion, clientVersion)
 		return
-	}
-
-	if manifest.FormatVersion != 1 {
-		err = fmt.Errorf("unsupported replay-data package format %d", manifest.FormatVersion)
-		return
-	}
-
-	if manifest.ClientVersion != clientVersion && !allowVersionMixing {
-		err = fmt.Errorf("replay-data package is for %s, replay is %s", manifest.ClientVersion, clientVersion)
-		return
-	}
-
-	for name, expectedHash := range manifest.Files {
-		var relativePath string = filepath.FromSlash(name)
-		if !filepath.IsLocal(relativePath) || relativePath == "." {
-			err = fmt.Errorf("schema file path %q is not package-relative", name)
-			return
-		}
-
-		var fileData []byte
-		if fileData, err = root.ReadFile(relativePath); err != nil {
-			err = fmt.Errorf("read schema file %s: %w", name, err)
-			return
-		}
-
-		var (
-			fileHash   [32]byte = sha256.Sum256(fileData)
-			actualHash string   = hex.EncodeToString(fileHash[:])
-		)
-
-		if actualHash != expectedHash {
-			err = fmt.Errorf("schema file %s failed SHA-256 validation", name)
-			return
-		}
 	}
 
 	var (
 		entitiesXML xmlNode
 		aliasesXML  xmlNode
-		defsPath    string = "entity_defs"
+		defsPath    string = "scripts/entity_defs"
 	)
 
-	if err = readXML(root, "entities.xml", &entitiesXML); err != nil {
+	if err = readXML(archive, "scripts/entities.xml", &entitiesXML); err != nil {
 		return
 	}
 
-	if err = readXML(root, filepath.Join(defsPath, "alias.xml"), &aliasesXML); err != nil {
+	if err = readXML(archive, path.Join(defsPath, "alias.xml"), &aliasesXML); err != nil {
 		return
 	}
 
@@ -135,7 +91,7 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 	)
 
 	schema = &Schema{
-		ClientVersion:   manifest.ClientVersion,
+		ClientVersion:   clientVersion,
 		entities:        make(map[uint16]string),
 		properties:      make(map[string][]string),
 		propertyTypes:   make(map[string][]string),
@@ -146,34 +102,46 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 		aliasPrimitives: aliasPrimitives,
 	}
 
-	schema.vehicles = make(map[uint64]Vehicle)
-	schema.planeIcons = make(map[uint64]string)
-	if planeData, readErr := root.ReadFile("plane_icons.json"); readErr == nil {
-		var icons []PlaneIcon
-		if err = json.Unmarshal(planeData, &icons); err != nil {
-			err = fmt.Errorf("decode plane icon catalog: %w", err)
-			return
-		}
-		for _, icon := range icons {
-			schema.planeIcons[icon.ID] = icon.Name
-		}
-	} else if !os.IsNotExist(readErr) {
-		err = readErr
+	var (
+		catalog        []byte
+		localizedNames map[string]string
+		params         *wowsextractor.GameParams
+		vehicles       []Vehicle
+		icons          []PlaneIcon
+	)
+
+	if catalog, err = archive.ReadFile("bin/res/texts/en/LC_MESSAGES/global.mo"); err != nil {
 		return
 	}
-	if vehicleData, readErr := root.ReadFile("vehicles.json"); readErr == nil {
-		var vehicles []Vehicle
-		if err = json.Unmarshal(vehicleData, &vehicles); err != nil {
-			err = fmt.Errorf("decode vehicle catalog: %w", err)
-			return
-		}
 
-		for _, vehicle := range vehicles {
-			schema.vehicles[vehicle.ID] = vehicle
-		}
-	} else if !os.IsNotExist(readErr) {
-		err = readErr
+	if localizedNames, err = ParseMO(bytes.NewReader(catalog)); err != nil {
 		return
+	}
+
+	if params, err = archive.LoadGameParams("NA"); err != nil {
+		return
+	}
+
+	if catalog, err = gameParamsJSON(params); err != nil {
+		return
+	}
+
+	if vehicles, err = ParseVehicles(bytes.NewReader(catalog), localizedNames); err != nil {
+		return
+	}
+
+	if icons, err = ParsePlaneIcons(bytes.NewReader(catalog)); err != nil {
+		return
+	}
+
+	schema.vehicles = make(map[uint64]Vehicle, len(vehicles))
+	for _, vehicle := range vehicles {
+		schema.vehicles[vehicle.ID] = vehicle
+	}
+
+	schema.planeIcons = make(map[uint64]string, len(icons))
+	for _, icon := range icons {
+		schema.planeIcons[icon.ID] = icon.Name
 	}
 
 	var entityNames []string
@@ -189,7 +157,7 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 		schema.entities[uint16(index+1)] = name
 
 		var entity xmlNode
-		if err = readXML(root, filepath.Join(defsPath, name+".def"), &entity); err != nil {
+		if err = readXML(archive, path.Join(defsPath, name+".def"), &entity); err != nil {
 			return
 		}
 
@@ -198,7 +166,7 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 			allMethods    []method
 		)
 
-		if err = schema.readEntity(root, defsPath, entity, make(map[string]bool), &allProperties, &allMethods, aliases); err != nil {
+		if err = schema.readEntity(archive, defsPath, entity, make(map[string]bool), &allProperties, &allMethods, aliases); err != nil {
 			return
 		}
 
@@ -232,7 +200,7 @@ func Load(directory string, clientVersion string, allowVersionMixing bool) (sche
 }
 
 // readEntity applies the depth-first interface order used by BigWorld definitions.
-func (schema *Schema) readEntity(root *os.Root, defsPath string, node xmlNode, visited map[string]bool, properties *[]property, methods *[]method, aliases map[string]int) (err error) {
+func (schema *Schema) readEntity(root fs.FS, defsPath string, node xmlNode, visited map[string]bool, properties *[]property, methods *[]method, aliases map[string]int) (err error) {
 	for _, child := range node.Children {
 		if child.XMLName.Local != "Implements" {
 			continue
@@ -247,7 +215,7 @@ func (schema *Schema) readEntity(root *os.Root, defsPath string, node xmlNode, v
 			visited[name] = true
 
 			var interfaceNode xmlNode
-			if err = readXML(root, filepath.Join(defsPath, "interfaces", name+".def"), &interfaceNode); err != nil {
+			if err = readXML(root, path.Join(defsPath, "interfaces", name+".def"), &interfaceNode); err != nil {
 				return
 			}
 
@@ -456,9 +424,9 @@ func (schema *Schema) PlaneIcon(gameParamsID uint32) (name string, ok bool) {
 }
 
 // readXML loads one XML schema file.
-func readXML(root *os.Root, path string, node *xmlNode) (err error) {
+func readXML(root fs.FS, name string, node *xmlNode) (err error) {
 	var data []byte
-	if data, err = root.ReadFile(path); err != nil {
+	if data, err = fs.ReadFile(root, name); err != nil {
 		return
 	}
 

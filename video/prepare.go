@@ -8,8 +8,10 @@ import (
 	"image/draw"
 	"image/png"
 	"io"
+	"io/fs"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"github.com/gogpu/gg"
 	"github.com/gogpu/gg/svg"
 	"github.com/gogpu/gg/text"
+	wowsextractor "github.com/z46-dev/wows-extractor"
 	replayparser "github.com/z46-dev/wows-replay-parser"
 	"github.com/z46-dev/wows-replay-parser/internal/events"
 	"github.com/z46-dev/wows-replay-parser/internal/render"
@@ -26,10 +29,9 @@ import (
 )
 
 type (
-	// PrepareOptions selects local game assets and the replay clock for a prepared frame.
+	// PrepareOptions selects an archived game build and replay clock for a prepared frame.
 	PrepareOptions struct {
 		GameDataPath string
-		SpacesPath   string
 		FontPath     string
 		Clock        float64
 	}
@@ -49,13 +51,19 @@ func PrepareFrame(replay *replayparser.Replay, timeline *Timeline, schema *Repla
 		err = fmt.Errorf("replay and event timeline are required")
 		return
 	}
-	if options.SpacesPath == "" || options.GameDataPath == "" {
-		err = fmt.Errorf("spaces and game-data paths are required to prepare a frame")
+	if options.GameDataPath == "" {
+		err = fmt.Errorf("game-data archive is required to prepare a frame")
 		return
 	}
 
+	var archive *wowsextractor.Archive
+	if archive, err = wowsextractor.Load(options.GameDataPath); err != nil {
+		return
+	}
+	defer archive.Close()
+
 	var resources mapResources
-	if resources, err = loadMapResources(options, replay); err != nil {
+	if resources, err = loadMapResources(archive, options, replay); err != nil {
 		return
 	}
 	mapName = resources.name
@@ -112,13 +120,13 @@ func PrepareFrame(replay *replayparser.Replay, timeline *Timeline, schema *Repla
 		if schema != nil {
 			if vehicle, ok := schema.Vehicle(player.VehicleTypeID); ok {
 				shipClass = shipSpecies(vehicle)
-				if classIcon, err = loadShipClassIcon(options.GameDataPath, options.SpacesPath, shipClass, ""); err != nil {
+				if classIcon, err = loadShipClassIcon(archive, shipClass, ""); err != nil {
 					return
 				}
-				if classIconDead, err = loadShipClassIcon(options.GameDataPath, options.SpacesPath, shipClass, "_dead"); err != nil {
+				if classIconDead, err = loadShipClassIcon(archive, shipClass, "_dead"); err != nil {
 					return
 				}
-				if classIconHidden, err = loadShipClassIcon(options.GameDataPath, options.SpacesPath, shipClass, "_last_visible"); err != nil {
+				if classIconHidden, err = loadShipClassIcon(archive, shipClass, "_last_visible"); err != nil {
 					return
 				}
 				if classIcon != nil {
@@ -137,7 +145,7 @@ func PrepareFrame(replay *replayparser.Replay, timeline *Timeline, schema *Repla
 	render.SortPlayers(leftTeam)
 	render.SortPlayers(rightTeam)
 	var killIcon image.Image
-	if killIcon, err = loadKillIcon(options.GameDataPath, options.SpacesPath); err != nil {
+	if killIcon, err = loadKillIcon(archive); err != nil {
 		return
 	}
 
@@ -164,7 +172,7 @@ func PrepareFrame(replay *replayparser.Replay, timeline *Timeline, schema *Repla
 			if _, exists := planeIcons[key]; exists {
 				continue
 			}
-			if planeIcons[key], err = loadPlaneIcon(options.GameDataPath, options.SpacesPath, iconName, side); err != nil {
+			if planeIcons[key], err = loadPlaneIcon(archive, iconName, side); err != nil {
 				return
 			}
 		}
@@ -193,33 +201,13 @@ func PrepareFrame(replay *replayparser.Replay, timeline *Timeline, schema *Repla
 	return
 }
 
-// loadPlaneIcon reads the exact per-aircraft minimap marker packaged from the selected game version.
-func loadPlaneIcon(gameDataPath string, spacesPath string, name string, side string) (icon image.Image, err error) {
-	if !filepath.IsLocal(filepath.FromSlash(name)) || (side != "ally" && side != "enemy") {
+// loadPlaneIcon reads one aircraft minimap marker from the archive.
+func loadPlaneIcon(archive fs.FS, name string, side string) (icon image.Image, err error) {
+	if !fs.ValidPath(name) || (side != "ally" && side != "enemy") {
+		err = fmt.Errorf("invalid aircraft icon %q or side %q", name, side)
 		return
 	}
-	var relativePath string = filepath.FromSlash(name) + "_" + side + ".png"
-	for _, iconPath := range []string{
-		filepath.Join(gameDataPath, "plane_icons", relativePath),
-		filepath.Join(filepath.Dir(spacesPath), "gui", "battle_hud", "markers_minimap", "plane", relativePath),
-	} {
-		var file *os.File
-		if file, err = os.Open(iconPath); err != nil { // #nosec G304 -- name is local and side is allowlisted; the path stays beneath game asset roots.
-			if os.IsNotExist(err) {
-				err = nil
-				continue
-			}
-			return
-		}
-		if icon, _, err = image.Decode(file); err != nil {
-			err = errors.Join(err, file.Close())
-			return
-		}
-		if err = file.Close(); err != nil {
-			return
-		}
-		return
-	}
+	icon, err = loadOptionalImage(archive, path.Join("gui/battle_hud/markers_minimap/plane", name+"_"+side+".png"))
 	return
 }
 
@@ -238,8 +226,8 @@ func replayDuration(resultDuration uint64, timeline *Timeline, fallback int) (du
 }
 
 // LoadReplaySchema loads version-matched data for decoding and preparing replay frames.
-func LoadReplaySchema(directory string, clientVersion string, allowVersionMixing bool) (schema *ReplaySchema, err error) {
-	return replaydata.Load(directory, clientVersion, allowVersionMixing)
+func LoadReplaySchema(archivePath string, clientVersion string, allowVersionMixing bool) (schema *ReplaySchema, err error) {
+	return replaydata.Load(archivePath, clientVersion, allowVersionMixing)
 }
 
 // EncodePNG renders and encodes a frame as PNG.
@@ -252,18 +240,18 @@ func EncodePNG(writer io.Writer, frame Frame) (err error) {
 }
 
 // loadMapResources loads the replay's map image, bounds, and selected font.
-func loadMapResources(options PrepareOptions, replay *replayparser.Replay) (resources mapResources, err error) {
+func loadMapResources(archive fs.FS, options PrepareOptions, replay *replayparser.Replay) (resources mapResources, err error) {
 	resources.name = filepath.Base(strings.TrimRight(replay.Metadata.MapName, "/\\"))
 	if !filepath.IsLocal(resources.name) || resources.name == "." || resources.name == ".." {
 		err = fmt.Errorf("invalid replay map name %q", replay.Metadata.MapName)
 		return
 	}
 
-	var mapPath string = filepath.Join(options.SpacesPath, resources.name)
-	if resources.image, err = loadMap(mapPath); err != nil {
+	var mapPath string = path.Join("spaces", resources.name)
+	if resources.image, err = loadMap(archive, mapPath); err != nil {
 		return
 	}
-	if resources.bounds, err = LoadWorldBounds(filepath.Join(mapPath, "space.settings")); err != nil {
+	if resources.bounds, err = LoadWorldBounds(archive, path.Join(mapPath, "space.settings")); err != nil {
 		return
 	}
 
@@ -348,7 +336,7 @@ func orderTeamsByOwnTeam(teamIDs []uint64, players map[uint64]events.BattlePlaye
 }
 
 // loadShipClassIcon rasterizes a unified SVG minimap marker for the requested class/state.
-func loadShipClassIcon(gameDataPath string, spacesPath string, species string, state string) (icon image.Image, err error) {
+func loadShipClassIcon(archive fs.FS, species string, state string) (icon image.Image, err error) {
 	var class string
 	switch strings.ToLower(species) {
 	case "aircarrier", "aircraftcarrier", "carrier":
@@ -364,59 +352,31 @@ func loadShipClassIcon(gameDataPath string, spacesPath string, species string, s
 	default:
 		return
 	}
-	for _, iconPath := range []string{
-		filepath.Join(gameDataPath, "ships_classes", class+state+".svg"),
-		filepath.Join(filepath.Dir(spacesPath), "gui", "fla", "minimap", "ship_icons", "minimap_"+class+state+".svg"),
-	} {
-		var file *os.File
-		if file, err = os.Open(iconPath); err != nil { // #nosec G304 -- class/state are fixed allowlisted path components.
-			if os.IsNotExist(err) {
-				err = nil
-				continue
-			}
-			return
+	var svgData []byte
+	if svgData, err = fs.ReadFile(archive, path.Join("gui/fla/minimap/ship_icons", "minimap_"+class+state+".svg")); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			err = nil
 		}
-		var svgData []byte
-		svgData, err = io.ReadAll(file)
-		err = errors.Join(err, file.Close())
-		if err != nil {
-			return
-		}
-		var document *svg.Document
-		if document, err = svg.Parse(svgData); err != nil {
-			return
-		}
-		var (
-			targetScale  float64     = math.Min(26/document.ViewBox.Width, 32/document.ViewBox.Height)
-			targetWidth  float64     = document.ViewBox.Width * targetScale
-			targetHeight float64     = document.ViewBox.Height * targetScale
-			canvas       *gg.Context = gg.NewContext(36, 36)
-		)
-		document.RenderTo(canvas, (36-targetWidth)/2, (36-targetHeight)/2, targetWidth, targetHeight)
-		icon = canvas.Image()
 		return
 	}
+	var document *svg.Document
+	if document, err = svg.Parse(svgData); err != nil {
+		return
+	}
+	var (
+		targetScale  float64     = math.Min(26/document.ViewBox.Width, 32/document.ViewBox.Height)
+		targetWidth  float64     = document.ViewBox.Width * targetScale
+		targetHeight float64     = document.ViewBox.Height * targetScale
+		canvas       *gg.Context = gg.NewContext(36, 36)
+	)
+	document.RenderTo(canvas, (36-targetWidth)/2, (36-targetHeight)/2, targetWidth, targetHeight)
+	icon = canvas.Image()
 	return
 }
 
-// loadKillIcon loads the game's fragment counter marker from the package or unpacked install.
-func loadKillIcon(gameDataPath string, spacesPath string) (icon image.Image, err error) {
-	for _, iconPath := range []string{
-		filepath.Join(gameDataPath, "gui", "battle_hud", "icon_frag", "frags.png"),
-		filepath.Join(filepath.Dir(spacesPath), "gui", "battle_hud", "icon_frag", "frags.png"),
-	} {
-		var file *os.File
-		if file, err = os.Open(iconPath); err != nil { // #nosec G304 -- the path uses fixed icon names beneath selected game asset roots.
-			if os.IsNotExist(err) {
-				err = nil
-				continue
-			}
-			return
-		}
-		icon, _, err = image.Decode(file)
-		err = errors.Join(err, file.Close())
-		return
-	}
+// loadKillIcon reads the game's fragment counter marker when available.
+func loadKillIcon(archive fs.FS) (icon image.Image, err error) {
+	icon, err = loadOptionalImage(archive, "gui/battle_hud/icon_frag/frags.png")
 	return
 }
 
@@ -443,13 +403,13 @@ func tintShipClassIcon(icon image.Image, tint color.RGBA) (tinted image.Image) {
 }
 
 // loadMap composites the game's water and transparent terrain minimaps.
-func loadMap(directory string) (mapImage image.Image, err error) {
+func loadMap(archive fs.FS, directory string) (mapImage image.Image, err error) {
 	var water image.Image
-	if water, err = loadImage(filepath.Join(directory, "minimap_water.png")); err != nil {
+	if water, err = loadImage(archive, path.Join(directory, "minimap_water.png")); err != nil {
 		return
 	}
 	var land image.Image
-	if land, err = loadImage(filepath.Join(directory, "minimap.png")); err != nil {
+	if land, err = loadImage(archive, path.Join(directory, "minimap.png")); err != nil {
 		return
 	}
 	if water.Bounds().Size() != land.Bounds().Size() {
@@ -463,13 +423,21 @@ func loadMap(directory string) (mapImage image.Image, err error) {
 }
 
 // loadImage decodes one game minimap image.
-func loadImage(path string) (loaded image.Image, err error) {
-	var file *os.File
-	if file, err = os.Open(path); err != nil { // #nosec G304 -- caller constructs paths below validated game-data roots.
+func loadImage(archive fs.FS, name string) (loaded image.Image, err error) {
+	var file fs.File
+	if file, err = archive.Open(name); err != nil {
 		return
 	}
 	defer file.Close()
 	loaded, _, err = image.Decode(file)
+	return
+}
+
+// loadOptionalImage omits a missing decorative icon while preserving decode errors.
+func loadOptionalImage(archive fs.FS, name string) (loaded image.Image, err error) {
+	if loaded, err = loadImage(archive, name); errors.Is(err, fs.ErrNotExist) {
+		err = nil
+	}
 	return
 }
 

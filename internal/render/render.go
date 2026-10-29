@@ -783,6 +783,14 @@ func drawSidebar(canvas *gg.Context, title string, players []Player, left int, w
 		}
 
 		var y float64 = float64(top+34) + float64(index)*rowHeight
+		if !player.Alive {
+			canvas.SetColor(color.RGBA{R: 24, G: 32, B: 43, A: 255})
+			canvas.DrawRectangle(float64(left)+4, y, float64(width)-8, rowHeight-1)
+			if err = canvas.Fill(); err != nil {
+				return
+			}
+		}
+
 		canvas.SetColor(color.RGBA{R: 28, G: 36, B: 48, A: 255})
 		canvas.DrawRectangle(float64(left)+4, y+rowHeight-1, float64(width)-8, 1)
 		if err = canvas.Fill(); err != nil {
@@ -804,7 +812,7 @@ func drawSidebar(canvas *gg.Context, title string, players []Player, left int, w
 		if player.Alive {
 			canvas.SetColor(nameColor)
 		} else {
-			canvas.SetColor(mutedColor)
+			canvas.SetColor(color.RGBA{R: 190, G: 200, B: 211, A: 255})
 		}
 		if boldFace != nil {
 			canvas.SetFont(boldFace)
@@ -818,6 +826,7 @@ func drawSidebar(canvas *gg.Context, title string, players []Player, left int, w
 		}
 		canvas.ClipRect(textClipX, y+2, float64(width)-104, rowHeight-3)
 		canvas.Translate(textX, y+16)
+		playerName = fitSidebarText(canvas, playerName, float64(width)-104)
 		if rightAligned {
 			canvas.DrawStringAnchored(playerName, 0, 0, 1, 0.5)
 		} else {
@@ -883,9 +892,9 @@ func drawSidebar(canvas *gg.Context, title string, players []Player, left int, w
 		canvas.SetColor(mutedColor)
 		canvas.SetFont(face)
 		if rightAligned {
-			canvas.DrawStringAnchored(player.ShipName, iconX-8, y+31, 1, 0.5)
+			canvas.DrawStringAnchored(fitSidebarText(canvas, player.ShipName, float64(width)-48), iconX-8, y+31, 1, 0.5)
 		} else {
-			canvas.DrawString(player.ShipName, float64(left)+40, y+31)
+			canvas.DrawString(fitSidebarText(canvas, player.ShipName, float64(width)-48), float64(left)+40, y+31)
 		}
 
 		var (
@@ -915,18 +924,33 @@ func drawSidebar(canvas *gg.Context, title string, players []Player, left int, w
 			}
 		}
 		canvas.SetFont(face)
+		var healthText string = fmt.Sprintf("%.0f / %.0f", player.Health, player.MaxHealth)
+		canvas.SetColor(backgroundColor)
+		canvas.DrawStringAnchored(healthText, healthX+healthBarWidth/2+1, healthY+11, 0.5, 0.5)
 		canvas.SetColor(textColor)
-		canvas.DrawStringAnchored(fmt.Sprintf("%.0f / %.0f", player.Health, player.MaxHealth), healthX+healthBarWidth/2, healthY+10, 0.5, 0.5)
+		canvas.DrawStringAnchored(healthText, healthX+healthBarWidth/2, healthY+10, 0.5, 0.5)
+	}
 
-		if !player.Alive {
-			canvas.SetColor(color.RGBA{R: 55, G: 60, B: 68, A: 155})
-			canvas.DrawRectangle(float64(left)+4, y, float64(width)-8, rowHeight-1)
-			if err = canvas.Fill(); err != nil {
-				return
-			}
+	return
+}
+
+// fitSidebarText keeps roster labels inside their column without cutting through a glyph.
+func fitSidebarText(canvas *gg.Context, value string, maxWidth float64) (fitted string) {
+	if width, _ := canvas.MeasureString(value); width <= maxWidth {
+		fitted = value
+		return
+	}
+
+	var characters []rune = []rune(value)
+	for len(characters) > 0 {
+		characters = characters[:len(characters)-1]
+		fitted = string(characters) + "…"
+		if width, _ := canvas.MeasureString(fitted); width <= maxWidth {
+			return
 		}
 	}
 
+	fitted = "…"
 	return
 }
 

@@ -3,12 +3,33 @@ package render
 import (
 	"image"
 	"image/color"
+	"strings"
 	"testing"
 
 	"github.com/gogpu/gg"
 	"github.com/gogpu/gg/text"
 	"golang.org/x/image/font/gofont/goregular"
 )
+
+// TestFitSidebarTextKeepsLongNamesWithinTheRosterColumn checks crowded names remain bounded.
+func TestFitSidebarTextKeepsLongNamesWithinTheRosterColumn(t *testing.T) {
+	var fontSource *text.FontSource
+	var err error
+	if fontSource, err = text.NewFontSource(goregular.TTF); err != nil {
+		t.Fatal(err)
+	}
+	defer fontSource.Close()
+
+	var canvas *gg.Context = gg.NewContext(280, 60)
+	defer canvas.Close()
+	canvas.SetFont(fontSource.Face(18))
+	var fitted string = fitSidebarText(canvas, "[CLAN] very-long-player-name-日本語", 176)
+	var width float64
+	width, _ = canvas.MeasureString(fitted)
+	if width > 176 || !strings.HasSuffix(fitted, "…") {
+		t.Fatalf("fitted sidebar name %q measures %.1f pixels", fitted, width)
+	}
+}
 
 // TestPlaceShipAnnotationsAvoidsMapAndLabelCollisions protects dense-team readability.
 func TestPlaceShipAnnotationsAvoidsMapAndLabelCollisions(t *testing.T) {

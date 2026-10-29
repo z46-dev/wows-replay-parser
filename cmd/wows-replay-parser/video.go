@@ -17,7 +17,6 @@ func exportReplayFrame(args arguments, replay *replayparser.Replay, timeline *vi
 	)
 	if frame, mapName, err = video.PrepareFrame(replay, timeline, schema, video.PrepareOptions{
 		GameDataPath: args.GameData,
-		SpacesPath:   args.SpacesPath,
 		FontPath:     args.FontPath,
 		Clock:        args.At,
 	}); err != nil {
@@ -44,7 +43,6 @@ func exportReplayVideo(args arguments, replay *replayparser.Replay, timeline *vi
 	var frame video.Frame
 	if frame, _, err = video.PrepareFrame(replay, timeline, schema, video.PrepareOptions{
 		GameDataPath: args.GameData,
-		SpacesPath:   args.SpacesPath,
 		FontPath:     args.FontPath,
 	}); err != nil {
 		return

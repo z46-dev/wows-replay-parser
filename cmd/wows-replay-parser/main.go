@@ -17,10 +17,9 @@ const maxReplayFileSize int64 = 256 << 20
 type arguments struct {
 	ReplayPath         string  `arg:"positional,required" placeholder:"REPLAY" help:"Path to a .wowsreplay file"`
 	EventsJSON         bool    `arg:"--events-json" help:"Write decoded events as JSON instead of the replay summary"`
-	GameData           string  `arg:"--gamedata" placeholder:"PATH" help:"Extracted replay-data package matching this replay's client version"`
+	GameData           string  `arg:"--gamedata" placeholder:"PATH" help:"wows-extractor ZIP matching this replay's client version"`
 	ExportFrame        string  `arg:"--export-frame" placeholder:"PATH" help:"Export one rendered PNG frame instead of printing the replay summary"`
 	ExportVideo        string  `arg:"--export-video" placeholder:"PATH" help:"Export a headless MP4 replay video using FFmpeg"`
-	SpacesPath         string  `arg:"--spaces" placeholder:"PATH" help:"Unpacked game spaces directory (required for frame and video exports)"`
 	FontPath           string  `arg:"--font" placeholder:"PATH" help:"Optional TTF/OTF font file for frame export"`
 	At                 float64 `arg:"--at" placeholder:"SECONDS" default:"0" help:"Replay clock time to render with --export-frame"`
 	VideoFPS           int     `arg:"--video-fps" default:"30" help:"Video frame rate (1-60)"`
@@ -76,8 +75,8 @@ func inspectReplay(args arguments) (err error) {
 		return
 	}
 
-	if (args.ExportFrame != "" || args.ExportVideo != "") && (args.SpacesPath == "" || args.GameData == "") {
-		err = fmt.Errorf("--export-frame and --export-video require --spaces and --gamedata")
+	if (args.ExportFrame != "" || args.ExportVideo != "") && args.GameData == "" {
+		err = fmt.Errorf("--export-frame and --export-video require --gamedata")
 		return
 	}
 
