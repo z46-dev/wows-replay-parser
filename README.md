@@ -1,3 +1,6 @@
+![Tests](https://img.shields.io/github/actions/workflow/status/z46-dev/wows-replay-parser/ci.yml?branch=main&event=push&label=CI)
+![Made with Golang](https://img.shields.io/badge/-Made_with_Golang-007d9c?logo=go&logoColor=white)
+
 # wows-replay-parser
 
 A Go library and CLI for World of Warships replays. The new parser follows the local WoWS Toolkit `wows_replays` crate for replay and packet behavior, and uses `wows-extractor` archives for build data.
