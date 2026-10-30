@@ -14,29 +14,35 @@ import (
 	replayparser "github.com/z46-dev/wows-replay-parser"
 )
 
-type (
-	inspectCommand struct {
-		Replay string `arg:"positional,required" help:"Replay file"`
-		JSON   bool   `arg:"--json,-j" help:"Print metadata as JSON"`
-	}
+type inspectCommand struct {
+	Replay string `arg:"positional,required" help:"Replay file"`
+	JSON   bool   `arg:"--json,-j" help:"Print metadata as JSON"`
+}
 
-	packetsCommand struct {
-		Replay   string `arg:"positional,required" help:"Replay file"`
-		GameData string `arg:"--gamedata,-g" help:"Opened extractor archive to verify against the replay"`
-		JSON     bool   `arg:"--json,-j" help:"Print packet counts as JSON"`
-	}
+type packetsCommand struct {
+	Replay   string `arg:"positional,required" help:"Replay file"`
+	GameData string `arg:"--gamedata,-g" help:"Opened extractor archive to verify against the replay"`
+	JSON     bool   `arg:"--json,-j" help:"Print packet counts as JSON"`
+}
 
-	arguments struct {
-		Inspect *inspectCommand `arg:"subcommand:inspect"`
-		Packets *packetsCommand `arg:"subcommand:packets"`
-	}
+type eventsCommand struct {
+	Replay   string `arg:"positional,required" help:"Replay file"`
+	GameData string `arg:"--gamedata,-g,required" help:"Extractor archive for this replay build"`
+	Type     string `arg:"--type" help:"Only emit this packet type"`
+	EntityID uint32 `arg:"--entity-id" help:"Only emit events for this entity ID"`
+}
 
-	packetSummary struct {
-		Metadata replayparser.Metadata `json:"metadata"`
-		Total    int                   `json:"total"`
-		ByType   map[string]int        `json:"byType"`
-	}
-)
+type arguments struct {
+	Inspect *inspectCommand `arg:"subcommand:inspect"`
+	Packets *packetsCommand `arg:"subcommand:packets"`
+	Events  *eventsCommand  `arg:"subcommand:events"`
+}
+
+type packetSummary struct {
+	Metadata replayparser.Metadata `json:"metadata"`
+	Total    int                   `json:"total"`
+	ByType   map[string]int        `json:"byType"`
+}
 
 // Helpful error reporting function that prints to stderr and exits with a non-zero status code.
 func errorf(format string, args ...any) {
@@ -67,9 +73,46 @@ func run(arguments arguments, output io.Writer) (err error) {
 		err = runInspect(arguments, output)
 	case arguments.Packets != nil:
 		err = runPackets(arguments, output)
+	case arguments.Events != nil:
+		err = runEvents(arguments, output)
 	default:
 		err = fmt.Errorf("no subcommand provided")
 	}
+
+	return
+}
+
+// runEvents streams decoded events as JSON Lines through the library event walker.
+func runEvents(args arguments, output io.Writer) (err error) {
+	var (
+		replay  *replayparser.Replay
+		archive *wowsextractor.Archive
+		data    *replayparser.GameData
+	)
+
+	if replay, err = loadReplay(args.Events.Replay, false); err != nil {
+		return
+	}
+	if archive, err = wowsextractor.Load(args.Events.GameData); err != nil {
+		return
+	}
+	defer archive.Close()
+	if data, err = replayparser.NewGameData(archive); err != nil {
+		return
+	}
+
+	var encoder *json.Encoder = json.NewEncoder(output)
+	err = replay.WalkEvents(context.Background(), data, func(event replayparser.Event) (visitErr error) {
+		if args.Events.Type != "" && event.Type != args.Events.Type {
+			return
+		}
+		if args.Events.EntityID != 0 && event.EntityID != args.Events.EntityID {
+			return
+		}
+		visitErr = encoder.Encode(event)
+
+		return
+	})
 
 	return
 }

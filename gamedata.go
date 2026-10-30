@@ -11,9 +11,30 @@ import (
 
 // GameData shares build assets and decoded catalogs from a caller-owned archive.
 type GameData struct {
-	archive *wowsextractor.Archive
-	mu      sync.Mutex
-	params  map[string]*wowsextractor.GameParams
+	archive     *wowsextractor.Archive
+	mu          sync.Mutex
+	params      map[string]*wowsextractor.GameParams
+	specs       []EntitySpec
+	specsErr    error
+	specsLoaded bool
+}
+
+// EntitySpecs loads Toolkit-compatible entity definitions once per archive.
+func (data *GameData) EntitySpecs() (specs []EntitySpec, err error) {
+	if data == nil {
+		err = fmt.Errorf("game data is required")
+		return
+	}
+
+	data.mu.Lock()
+	defer data.mu.Unlock()
+	if !data.specsLoaded {
+		data.specs, data.specsErr = loadEntitySpecs(data)
+		data.specsLoaded = true
+	}
+
+	specs, err = data.specs, data.specsErr
+	return
 }
 
 // NewGameData borrows an opened extractor archive without taking ownership of it.
