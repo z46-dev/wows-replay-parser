@@ -32,10 +32,16 @@ type eventsCommand struct {
 	EntityID uint32 `arg:"--entity-id" help:"Only emit events for this entity ID"`
 }
 
+type analyzeCommand struct {
+	Replay   string `arg:"positional,required" help:"Replay file"`
+	GameData string `arg:"--gamedata,-g,required" help:"Extractor archive for this replay build"`
+}
+
 type arguments struct {
 	Inspect *inspectCommand `arg:"subcommand:inspect"`
 	Packets *packetsCommand `arg:"subcommand:packets"`
 	Events  *eventsCommand  `arg:"subcommand:events"`
+	Analyze *analyzeCommand `arg:"subcommand:analyze"`
 }
 
 type packetSummary struct {
@@ -75,10 +81,42 @@ func run(arguments arguments, output io.Writer) (err error) {
 		err = runPackets(arguments, output)
 	case arguments.Events != nil:
 		err = runEvents(arguments, output)
+	case arguments.Analyze != nil:
+		err = runAnalyze(arguments, output)
 	default:
 		err = fmt.Errorf("no subcommand provided")
 	}
 
+	return
+}
+
+// runAnalyze emits the library's complete battle-fact timeline as JSON.
+func runAnalyze(args arguments, output io.Writer) (err error) {
+	var (
+		replay  *replayparser.Replay
+		archive *wowsextractor.Archive
+		data    *replayparser.GameData
+		battle  *replayparser.Battle
+	)
+
+	if replay, err = loadReplay(args.Analyze.Replay, false); err != nil {
+		return
+	}
+
+	if archive, err = wowsextractor.Load(args.Analyze.GameData); err != nil {
+		return
+	}
+
+	defer archive.Close()
+	if data, err = replayparser.NewGameData(archive); err != nil {
+		return
+	}
+
+	if battle, err = replay.Analyze(context.Background(), data); err != nil {
+		return
+	}
+
+	err = json.NewEncoder(output).Encode(battle)
 	return
 }
 
@@ -93,9 +131,11 @@ func runEvents(args arguments, output io.Writer) (err error) {
 	if replay, err = loadReplay(args.Events.Replay, false); err != nil {
 		return
 	}
+
 	if archive, err = wowsextractor.Load(args.Events.GameData); err != nil {
 		return
 	}
+
 	defer archive.Close()
 	if data, err = replayparser.NewGameData(archive); err != nil {
 		return
@@ -106,11 +146,12 @@ func runEvents(args arguments, output io.Writer) (err error) {
 		if args.Events.Type != "" && event.Type != args.Events.Type {
 			return
 		}
+
 		if args.Events.EntityID != 0 && event.EntityID != args.Events.EntityID {
 			return
 		}
-		visitErr = encoder.Encode(event)
 
+		visitErr = encoder.Encode(event)
 		return
 	})
 

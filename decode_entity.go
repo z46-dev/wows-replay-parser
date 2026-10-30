@@ -281,7 +281,8 @@ func (decoder *packetDecoder) decodeEntityMember(event *Event, reader *wireReade
 		}
 	}
 
-	if inner.remaining() > 0 {
+	// Toolkit accepts method payload extensions after the declared arguments.
+	if event.Type == "entity_property" && inner.remaining() > 0 {
 		event.Leftover = inner.data[inner.offset:]
 		event.Diagnostic = fmt.Sprintf("%s.%s left %d payload bytes", spec.Name, event.Name, inner.remaining())
 	}
