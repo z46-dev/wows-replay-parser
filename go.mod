@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	github.com/alexflint/go-arg v1.6.1
+	github.com/nlpodyssey/gopickle v0.3.0
 	github.com/stretchr/testify v1.12.1
 	github.com/z46-dev/golog v0.0.0-20261028182751-f884b5e83d72
 	github.com/z46-dev/wows-extractor v0.0.3
@@ -12,7 +13,6 @@ require (
 
 require (
 	github.com/alexflint/go-scalar v1.2.0 // indirect
-	github.com/nlpodyssey/gopickle v0.3.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/text v0.43.0 // indirect
 )
