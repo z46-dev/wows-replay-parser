@@ -7,7 +7,7 @@ require (
 	github.com/nlpodyssey/gopickle v0.3.0
 	github.com/stretchr/testify v1.12.1
 	github.com/z46-dev/golog v0.0.0-20261028182751-f884b5e83d72
-	github.com/z46-dev/wows-extractor v0.0.3
+	github.com/z46-dev/wows-extractor v0.0.5
 	golang.org/x/crypto v0.58.0
 )
 

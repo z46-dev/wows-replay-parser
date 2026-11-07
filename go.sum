@@ -11,8 +11,8 @@ github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWD
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/z46-dev/golog v0.0.0-20261028182751-f884b5e83d72 h1:0pbUSQVsTEOBgESkvz7KpkyQGb0+DWMqhPwgiqlaXHI=
 github.com/z46-dev/golog v0.0.0-20261028182751-f884b5e83d72/go.mod h1:NbT1GEG7RSgiGawFY58pylFq0eU7iJqOKn6tRKKHtDg=
-github.com/z46-dev/wows-extractor v0.0.3 h1:6yy90M+k0CQ9HZKAiFj1GxIAyAx147WFupQQkj343Fk=
-github.com/z46-dev/wows-extractor v0.0.3/go.mod h1:iCeiDP70z1CT79GVFw5I3upG951XdurHT5vuZ9FZ+Nw=
+github.com/z46-dev/wows-extractor v0.0.5 h1:DGYjkGslh/sPT+dAxDDFAo3nPdYyYNKsmo65X6Ggyb0=
+github.com/z46-dev/wows-extractor v0.0.5/go.mod h1:iCeiDP70z1CT79GVFw5I3upG951XdurHT5vuZ9FZ+Nw=
 go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
 go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=
 golang.org/x/crypto v0.58.0 h1:COkYLr4k7nDI4r6QtMML2AfzeIswWHAJthLS6K/M/54=
